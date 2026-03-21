@@ -2,30 +2,19 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import net from "node:net";
 import { promisify } from "node:util";
-import autocannon from "autocannon";
 
 const exec = promisify(setTimeout);
-
-type FrameworkName = "fearless";
-
-interface BenchmarkResult {
-  framework: FrameworkName;
-  requestsPerSec: number;
-  latencyAvgMs: number;
-  latencyP99Ms: number;
-  throughputMbps: number;
-}
-
-interface ServerSpec {
-  name: FrameworkName;
-  port: number;
-  script: string;
-}
 
 const serverDir = new URL("./servers/", import.meta.url);
 const connections = Number(process.env.BENCH_CONNECTIONS ?? 100);
 const duration = Number(process.env.BENCH_DURATION ?? 10);
-const benchmarkUrlPath = "/";
+const targetBody = "Hello, World!";
+
+interface ServerSpec {
+  name: "fearless";
+  port: number;
+  script: string;
+}
 
 const servers: ServerSpec[] = [
   { name: "fearless", port: 4101, script: fileURLToPath(new URL("fearless.ts", serverDir)) },
@@ -91,87 +80,132 @@ function stopServer(child: ReturnType<typeof spawn>): Promise<void> {
   });
 }
 
-async function runScenario(baseUrl: string): Promise<{
-  requestsPerSec: number;
-  latencyAvgMs: number;
-  latencyP99Ms: number;
-  throughputMbps: number;
-}> {
-  const result = await new Promise<any>((resolve, reject) => {
-    const instance = autocannon(
-      {
-        url: `${baseUrl}${benchmarkUrlPath}`,
-        method: "GET",
-        connections,
-        duration,
-        pipelining: 1,
-        headers: {
-          accept: "text/plain",
-        },
-      },
-      (error, res) => {
-        if (error) {
-          reject(error);
+function cleanEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  delete env.NO_COLOR;
+  delete env.OHA_NO_COLOR;
+  return env;
+}
+
+async function findRunner(): Promise<{ bin: string; argsBase: string[] }> {
+  const candidates: Array<{ bin: string; argsBase: string[] }> = [
+    { bin: "oha", argsBase: [] },
+    { bin: "wrk", argsBase: [] },
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(candidate.bin, ["--help"], { stdio: "ignore" });
+        child.once("error", reject);
+        child.once("exit", (code) => {
+          if (code === 0 || code === 1) {
+            resolve();
+          } else {
+            reject(new Error(`${candidate.bin} exited with ${code}`));
+          }
+        });
+      });
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+
+  throw new Error("Neither oha nor wrk is installed");
+}
+
+async function runOha(url: string): Promise<number> {
+  const runner = await findRunner();
+
+  if (runner.bin === "oha") {
+    const output = await new Promise<string>((resolve, reject) => {
+      const child = spawn(
+        "oha",
+        ["--output-format", "json", "-c", String(connections), "-z", `${duration}s`, url],
+        { stdio: ["ignore", "pipe", "pipe"], env: cleanEnv() }
+      );
+
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      child.once("error", reject);
+      child.once("exit", (code) => {
+        if (code === 0) {
+          resolve(stdout);
           return;
         }
 
-        resolve(res);
-      }
+        reject(new Error(stderr || stdout || `oha exited with ${code}`));
+      });
+    });
+
+    const json = JSON.parse(output) as { summary?: { requestsPerSec?: number } };
+    return json.summary?.requestsPerSec ?? Number.NaN;
+  }
+
+  const output = await new Promise<string>((resolve, reject) => {
+    const child = spawn(
+      "wrk",
+      ["-c", String(connections), "-d", `${duration}s`, url],
+      { stdio: ["ignore", "pipe", "pipe"], env: cleanEnv() }
     );
 
-    autocannon.track(instance, { renderProgressBar: false, renderResultsTable: false });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) {
+        resolve(stdout);
+        return;
+      }
+
+      reject(new Error(stderr || stdout || `wrk exited with ${code}`));
+    });
   });
 
-  return {
-    requestsPerSec: result.requests.average,
-    latencyAvgMs: result.latency.average,
-    latencyP99Ms: result.latency.p99,
-    throughputMbps: result.throughput.average / 1_000_000,
-  };
-}
+  const match = output.match(/Requests\/sec:\s+([\d,.]+)/i);
+  if (!match) {
+    throw new Error(`Could not parse wrk output:\n${output}`);
+  }
 
-function formatNumber(value: number): string {
-  return Number.isFinite(value) ? value.toFixed(2) : "n/a";
+  return Number(match[1].replace(/,/g, ""));
 }
 
 async function main(): Promise<void> {
-  const results: BenchmarkResult[] = [];
-
-  logSection(`PlainText benchmark on Node ${process.version}, ${connections} connections, ${duration}s`);
-  console.log("Target body: Hello, World!");
+  console.log(`PlainText benchmark on Node ${process.version}, ${connections} connections, ${duration}s`);
+  console.log(`Target body: ${targetBody}`);
+  console.log("Metric: requests/sec only, TechEmpower-style");
 
   for (const server of servers) {
     const child = spawnServer(server.script, server.port);
 
     try {
       await waitForTcp(server.port);
-      const baseUrl = `http://127.0.0.1:${server.port}`;
+      const url = `http://127.0.0.1:${server.port}/`;
 
       logSection(server.name);
-      const stats = await runScenario(baseUrl);
-      results.push({
-        framework: server.name,
-        ...stats,
-      });
-      console.log(
-        `${server.name.padEnd(8)} ${formatNumber(stats.requestsPerSec)} req/s  ` +
-          `${formatNumber(stats.latencyAvgMs)} ms avg  ${formatNumber(stats.latencyP99Ms)} ms p99`
-      );
+      const requestsPerSec = await runOha(url);
+      console.log(`${server.name.padEnd(8)} ${requestsPerSec.toFixed(2)} req/s`);
     } finally {
       await stopServer(child);
     }
   }
-
-  logSection("Summary");
-  console.table(
-    results.map((row) => ({
-      framework: row.framework,
-      "req/s": formatNumber(row.requestsPerSec),
-      "lat avg ms": formatNumber(row.latencyAvgMs),
-      "lat p99 ms": formatNumber(row.latencyP99Ms),
-      mbps: formatNumber(row.throughputMbps),
-    }))
-  );
 }
 
 main().catch((error) => {
