@@ -1,23 +1,23 @@
 import { ArkErrors } from "arktype";
-import type { HttpRequest as UWSRequest, HttpResponse as UWSResponse } from "uWebSockets.js";
-import type { BodyValidator, HttpMethod, QueryParams, Headers, IncomingRequest } from "./types.js";
+import type { IncomingMessage } from "node:http";
+import type { BodyValidator, Headers, HttpMethod, QueryParams, IncomingRequest } from "./types.js";
 
-const textDecoder = new TextDecoder();
-
-function decodeRemoteAddress(remoteAddress: ArrayBuffer): string {
-  const bytes = new Uint8Array(remoteAddress);
-  if (bytes.length === 4) {
-    let result = "";
-    for (let i = 0; i < bytes.length; i += 1) {
-      if (i > 0) {
-        result += ".";
-      }
-      result += bytes[i];
-    }
-    return result;
+function normalizePath(url: string): string {
+  const questionIndex = url.indexOf("?");
+  const path = questionIndex === -1 ? url : url.slice(0, questionIndex);
+  if (!path || path === "/") {
+    return "/";
   }
 
-  return textDecoder.decode(bytes).replace(/\0+$/, "");
+  return path.startsWith("/") ? path.replace(/\/+$/, "") || "/" : `/${path.replace(/\/+$/, "")}`;
+}
+
+function normalizeIp(address: string | undefined): string {
+  if (!address) {
+    return "";
+  }
+
+  return address.startsWith("::ffff:") ? address.slice(7) : address;
 }
 
 export class Request implements IncomingRequest {
@@ -30,64 +30,54 @@ export class Request implements IncomingRequest {
   private _ip: string | null = null;
   private _body: unknown = null;
   private _bodyParsed = false;
-  private _bodyPromise: Promise<unknown | null> | null = null;
+  private _bodyPromise: Promise<string | null> | null = null;
 
-  constructor(private req: UWSRequest, private res: UWSResponse, paramNames: readonly string[] = []) {
-    this.method = req.getMethod().toUpperCase() as HttpMethod;
-    this.url = req.getUrl();
-    this.path = this.parsePath(req.getUrl());
-    this.params = this.parseParams(req, paramNames);
-  }
-
-  private parsePath(url: string): string {
-    const questionIndex = url.indexOf("?");
-    return questionIndex === -1 ? url : url.substring(0, questionIndex);
+  constructor(private req: IncomingMessage, params: Record<string, string> = {}) {
+    this.method = (req.method || "GET").toUpperCase() as HttpMethod;
+    this.url = req.url || "/";
+    this.path = normalizePath(this.url);
+    this.params = params;
   }
 
   private parseQuery(queryString: string): QueryParams {
-    if (!queryString) return {};
-    const params: QueryParams = {};
-    for (const pair of queryString.split("&")) {
-      const [key, ...valueParts] = pair.split("=");
-      if (!key) continue;
-      const value = decodeURIComponent(valueParts.join("="));
-      if (params[key]) {
-        if (Array.isArray(params[key])) {
-          (params[key] as string[]).push(value);
-        } else {
-          params[key] = [params[key] as string, value];
-        }
-      } else {
-        params[key] = value;
-      }
-    }
-    return params;
-  }
-
-  private parseHeaders(req: UWSRequest): Headers {
-    const result: Headers = {};
-    req.forEach((key, value) => {
-      result[key] = value;
-    });
-    return result;
-  }
-
-  private parseParams(req: UWSRequest, paramNames: readonly string[]): Record<string, string> {
-    if (paramNames.length === 0) {
+    if (!queryString) {
       return {};
     }
 
-    const params: Record<string, string> = {};
-    for (let i = 0; i < paramNames.length; i += 1) {
-      params[paramNames[i]] = req.getParameter(paramNames[i]) ?? "";
+    const params: QueryParams = {};
+    const searchParams = new URLSearchParams(queryString);
+
+    for (const [key, value] of searchParams.entries()) {
+      const existing = params[key];
+      if (existing === undefined) {
+        params[key] = value;
+      } else if (Array.isArray(existing)) {
+        existing.push(value);
+      } else {
+        params[key] = [existing, value];
+      }
     }
 
     return params;
+  }
+
+  private parseHeaders(req: IncomingMessage): Headers {
+    const result: Headers = {};
+    for (const [key, value] of Object.entries(req.headers)) {
+      if (value === undefined) {
+        continue;
+      }
+
+      result[key] = Array.isArray(value) ? value.join(", ") : value;
+    }
+
+    return result;
   }
 
   get query(): QueryParams {
     if (this._query === null) {
-      this._query = this.parseQuery(this.req.getQuery());
+      const queryIndex = this.url.indexOf("?");
+      this._query = this.parseQuery(queryIndex === -1 ? "" : this.url.slice(queryIndex + 1));
     }
 
     return this._query;
@@ -103,7 +93,7 @@ export class Request implements IncomingRequest {
 
   get ip(): string {
     if (this._ip === null) {
-      this._ip = decodeRemoteAddress(this.res.getRemoteAddressAsText());
+      this._ip = normalizeIp(this.req.socket.remoteAddress);
     }
 
     return this._ip;
@@ -122,34 +112,52 @@ export class Request implements IncomingRequest {
     return this._bodyParsed;
   }
 
-  private readBody(): Promise<unknown | null> {
+  private readBody(): Promise<string | null> {
     if (this._bodyPromise) {
       return this._bodyPromise;
     }
 
     this._bodyPromise = new Promise((resolve) => {
       const chunks: Buffer[] = [];
+      let finished = false;
 
-      this.res.onData((ab, isLast) => {
-        chunks.push(Buffer.from(ab));
+      const cleanup = (): void => {
+        this.req.off("data", onData);
+        this.req.off("end", onEnd);
+        this.req.off("aborted", onAborted);
+        this.req.off("error", onError);
+      };
 
-        if (!isLast) {
+      const settle = (value: string | null): void => {
+        if (finished) {
           return;
         }
 
-        try {
-          const raw = Buffer.concat(chunks).toString("utf8");
-          const parsed = raw.length > 0 ? JSON.parse(raw) : null;
-          resolve(parsed);
-        } catch {
-          this.res.close();
-          resolve(null);
-        }
-      });
+        finished = true;
+        cleanup();
+        resolve(value);
+      };
 
-      this.res.onAborted(() => {
-        resolve(null);
-      });
+      const onData = (chunk: Buffer | string): void => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      };
+
+      const onEnd = (): void => {
+        settle(Buffer.concat(chunks).toString("utf8"));
+      };
+
+      const onAborted = (): void => {
+        settle(null);
+      };
+
+      const onError = (): void => {
+        settle(null);
+      };
+
+      this.req.on("data", onData);
+      this.req.once("end", onEnd);
+      this.req.once("aborted", onAborted);
+      this.req.once("error", onError);
     });
 
     return this._bodyPromise;
@@ -160,14 +168,23 @@ export class Request implements IncomingRequest {
       return this._body as T | null;
     }
 
-    const body = await this.readBody();
-    if (body === null) {
+    const raw = await this.readBody();
+    if (raw === null) {
+      this.setBody(null);
+      return null;
+    }
+
+    let body: unknown;
+    try {
+      body = raw.length > 0 ? JSON.parse(raw) : null;
+    } catch {
+      this.setBody(null);
       return null;
     }
 
     const result = schema(body);
     if (result instanceof ArkErrors) {
-      this.res.close();
+      this.setBody(null);
       return null;
     }
 

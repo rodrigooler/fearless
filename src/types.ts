@@ -57,6 +57,6 @@ export interface AppOptions {
   passphrase?: string;
   port?: number;
   host?: string;
-  engine?: "uws" | "rust";
+  engine?: "node" | "rust";
   rustCoreBinary?: string;
 }

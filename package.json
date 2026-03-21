@@ -1,7 +1,7 @@
 {
   "name": "microu",
   "version": "1.0.0",
-  "description": "Fast, minimalist Node.js framework powered by uWebSockets.js",
+  "description": "Fast, minimalist Node.js framework with built-in helpers",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -17,20 +17,23 @@
     "./dependencies/cors": {
       "types": "./dist/dependencies/cors.d.ts",
       "import": "./dist/dependencies/cors.js"
+    },
+    "./dependencies/security": {
+      "types": "./dist/dependencies/security.d.ts",
+      "import": "./dist/dependencies/security.js"
     }
   },
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\" && tsc",
     "dev": "tsx watch examples/basic.ts",
     "start": "node dist/examples/basic.js",
-    "test:js": "fnm exec --using=v22.22.1 node --import tsx --test",
+    "test:js": "node --import tsx --test",
     "test:rust": "cargo test --manifest-path rust-core/Cargo.toml",
     "test": "npm run test:js && npm run test:rust",
     "bench:tfb": "cd ../FrameworkBenchmarks && ./tfb --mode benchmark --test-dir TypeScript/fearless --type plaintext json --duration 10"
   },
   "dependencies": {
-    "arktype": "^2.0.0-rc.27",
-    "uWebSockets.js": "uNetworking/uWebSockets.js#v20.51.0"
+    "arktype": "^2.0.0-rc.27"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

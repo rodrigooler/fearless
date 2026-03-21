@@ -1,4 +1,4 @@
-import type { HttpResponse as UWSResponse } from "uWebSockets.js";
+import type { ServerResponse } from "node:http";
 import type { OutgoingResponse } from "./types.js";
 
 export class Response implements OutgoingResponse {
@@ -6,7 +6,7 @@ export class Response implements OutgoingResponse {
   private _headers: Record<string, string> = {};
   private _ended = false;
 
-  constructor(private res: UWSResponse) {}
+  constructor(private res: ServerResponse, private suppressBody = false) {}
 
   status(code: number): this {
     this._status = code;
@@ -29,11 +29,19 @@ export class Response implements OutgoingResponse {
   }
 
   setHeader(key: string, value: string): this {
+    if (this._ended) {
+      return this;
+    }
+
     this._headers[key] = value;
     return this;
   }
 
   setHeaders(headers: Record<string, string>): this {
+    if (this._ended) {
+      return this;
+    }
+
     for (const [key, value] of Object.entries(headers)) {
       this._headers[key] = value;
     }
@@ -41,21 +49,33 @@ export class Response implements OutgoingResponse {
   }
 
   end(data?: string | unknown): this {
-    const statusStr = `${this._status}`;
-    this.res.cork(() => {
-      this.res.writeStatus(statusStr);
-      for (const [key, value] of Object.entries(this._headers)) {
-        this.res.writeHeader(key, value);
-      }
-      if (data === undefined) {
-        this.res.end();
-      } else if (typeof data === "string") {
-        this.res.end(data);
-      } else {
-        this.res.end(JSON.stringify(data));
-      }
-    });
+    if (this._ended) {
+      return this;
+    }
+
     this._ended = true;
+    this.res.statusCode = this._status;
+
+    for (const [key, value] of Object.entries(this._headers)) {
+      this.res.setHeader(key, value);
+    }
+
+    if (this.suppressBody) {
+      this.res.end();
+      return this;
+    }
+
+    if (data === undefined) {
+      this.res.end();
+      return this;
+    }
+
+    if (typeof data === "string" || Buffer.isBuffer(data)) {
+      this.res.end(data);
+      return this;
+    }
+
+    this.res.end(JSON.stringify(data));
     return this;
   }
 
@@ -64,18 +84,21 @@ export class Response implements OutgoingResponse {
     if (typeof data === "string") {
       this.setHeader("Content-Type", "text/plain");
       return this.end(data);
-    } else if (data !== undefined) {
+    }
+
+    if (data !== undefined) {
       this.setHeader("Content-Type", "application/json");
       return this.end(JSON.stringify(data));
     }
+
     return this.end();
   }
 
-  getResponse(): UWSResponse {
+  getResponse(): ServerResponse {
     return this.res;
   }
 
   isEnded(): boolean {
-    return this._ended;
+    return this._ended || this.res.writableEnded;
   }
 }
