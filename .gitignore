@@ -1,4 +1,6 @@
 node_modules
 dist
+.cargo
+rust-core/target
 .DS_Store
 *.log

@@ -15,7 +15,9 @@
     "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\" && tsc",
     "dev": "tsx watch examples/basic.ts",
     "start": "node dist/examples/basic.js",
-    "test": "node --test",
+    "test:js": "node --import tsx --test",
+    "test:rust": "cargo test --manifest-path rust-core/Cargo.toml",
+    "test": "npm run test:js && npm run test:rust",
     "bench": "fnm exec --using=v22.22.1 tsx bench/run.ts"
   },
   "dependencies": {
