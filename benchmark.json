@@ -4,8 +4,8 @@
     "path": "../FrameworkBenchmarks"
   },
   "latestRun": {
-    "timestamp": "2026-03-21T23:34:57-03:00",
-    "resultsFile": "../FrameworkBenchmarks/results/20260321233457/results.json",
+    "timestamp": "2026-03-21T23:49:59-03:00",
+    "resultsFile": "../FrameworkBenchmarks/results/20260321234959/results.json",
     "testDir": "TypeScript/fearless",
     "tests": [
       "plaintext",
@@ -14,14 +14,14 @@
     "durationSec": 10,
     "summary": {
       "plaintext": {
-        "bestRequestsPerSec": 2338544.07,
+        "bestRequestsPerSec": 2353651.3,
         "bestConcurrency": 256,
-        "bestLatencyAvgMs": 5.94
+        "bestLatencyAvgMs": 1.44
       },
       "json": {
-        "bestRequestsPerSec": 1184391.55,
-        "bestConcurrency": 32,
-        "bestLatencyAvgMs": 0.05
+        "bestRequestsPerSec": 1306897.11,
+        "bestConcurrency": 16,
+        "bestLatencyAvgMs": 0.02
       }
     }
   }
