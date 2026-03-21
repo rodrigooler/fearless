@@ -130,6 +130,8 @@ function matchCompiledPath(route: CompiledPath, path: string): Record<string, st
 
 export class App {
   private routes: RouteHandler[] = [];
+  private exactRoutes = new Map<string, RouteHandler>();
+  private paramRoutes: RouteHandler[] = [];
   private middlewares: Middleware[] = [];
   private rustServer: RustCoreServerHandle | null = null;
   private rustStartup: Promise<void> | null = null;
@@ -148,8 +150,19 @@ export class App {
     this.config = { ...this.config, ...options };
   }
 
+  private routeKey(method: HttpMethod, path: string): string {
+    return `${method}\0${path}`;
+  }
+
   private addRoute(route: RouteHandler): this {
     this.routes.push(route);
+
+    if (route.compiledPath.paramNames.length === 0) {
+      this.exactRoutes.set(this.routeKey(route.method, route.compiledPath.normalized), route);
+    } else {
+      this.paramRoutes.push(route);
+    }
+
     return this;
   }
 
@@ -184,17 +197,29 @@ export class App {
   private findRoute(method: HttpMethod, path: string): RouteMatch | null {
     const normalizedPath = normalizePath(path);
 
-    for (const route of this.routes) {
+    const exactRoute = this.exactRoutes.get(this.routeKey(method, normalizedPath));
+    if (exactRoute) {
+      return {
+        route: exactRoute,
+        params: {},
+        suppressBody: method === "HEAD",
+      };
+    }
+
+    if (method === "HEAD") {
+      const exactGetRoute = this.exactRoutes.get(this.routeKey("GET", normalizedPath));
+      if (exactGetRoute) {
+        return {
+          route: exactGetRoute,
+          params: {},
+          suppressBody: true,
+        };
+      }
+    }
+
+    for (const route of this.paramRoutes) {
       if (route.method !== method) {
         continue;
-      }
-
-      if (route.compiledPath.normalized === normalizedPath) {
-        return {
-          route,
-          params: {},
-          suppressBody: method === "HEAD",
-        };
       }
 
       const params = matchCompiledPath(route.compiledPath, normalizedPath);
@@ -211,17 +236,9 @@ export class App {
       return null;
     }
 
-    for (const route of this.routes) {
+    for (const route of this.paramRoutes) {
       if (route.method !== "GET") {
         continue;
-      }
-
-      if (route.compiledPath.normalized === normalizedPath) {
-        return {
-          route,
-          params: {},
-          suppressBody: true,
-        };
       }
 
       const params = matchCompiledPath(route.compiledPath, normalizedPath);

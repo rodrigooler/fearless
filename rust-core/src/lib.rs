@@ -31,15 +31,8 @@ struct ResponseTemplate {
 }
 
 #[derive(Debug)]
-struct RouteEntry {
-    method: String,
-    path: String,
-    response: ResponseTemplate,
-}
-
-#[derive(Debug)]
 struct RouteTable {
-    routes: Vec<RouteEntry>,
+    routes: HashMap<String, HashMap<String, ResponseTemplate>>,
     not_found: ResponseTemplate,
 }
 
@@ -77,15 +70,14 @@ pub fn run_server(manifest: Manifest, port: u16) -> io::Result<()> {
 
 impl RouteTable {
     fn from_manifest(manifest: Manifest) -> Self {
-        let mut routes = Vec::with_capacity(manifest.routes.len());
+        let mut routes: HashMap<String, HashMap<String, ResponseTemplate>> = HashMap::with_capacity(manifest.routes.len());
 
         for route in manifest.routes {
             let response = ResponseTemplate::from_route(&route);
-            routes.push(RouteEntry {
-                method: route.method,
-                path: route.path,
-                response,
-            });
+            routes
+                .entry(route.method)
+                .or_default()
+                .insert(route.path, response);
         }
 
         let not_found = ResponseTemplate::from_parts(404, "text/plain", "Not Found", &HashMap::new());
@@ -95,9 +87,8 @@ impl RouteTable {
 
     fn lookup(&self, method: &str, path: &str) -> &ResponseTemplate {
         self.routes
-            .iter()
-            .find(|route| route.method == method && route.path == path)
-            .map(|route| &route.response)
+            .get(method)
+            .and_then(|method_routes| method_routes.get(path))
             .unwrap_or(&self.not_found)
     }
 }
@@ -290,5 +281,38 @@ mod tests {
 
         assert!(payload.starts_with("HTTP/1.1 404 Not Found"));
         assert!(payload.ends_with("Not Found"));
+    }
+
+    #[test]
+    fn route_table_looks_up_multiple_routes() {
+        let manifest = Manifest {
+            routes: vec![
+                RustStaticRoute {
+                    method: "GET".to_string(),
+                    path: "/plaintext".to_string(),
+                    content_type: "text/plain".to_string(),
+                    body: "Hello, World!".to_string(),
+                    headers: HashMap::new(),
+                    status: 200,
+                },
+                RustStaticRoute {
+                    method: "GET".to_string(),
+                    path: "/json".to_string(),
+                    content_type: "application/json".to_string(),
+                    body: r#"{"message":"Hello, World!"}"#.to_string(),
+                    headers: HashMap::new(),
+                    status: 200,
+                },
+            ],
+        };
+        let table = RouteTable::from_manifest(manifest);
+
+        let plaintext = String::from_utf8(table.lookup("GET", "/plaintext").keep_alive.clone()).expect("valid utf8");
+        let json = String::from_utf8(table.lookup("GET", "/json").keep_alive.clone()).expect("valid utf8");
+
+        assert!(plaintext.starts_with("HTTP/1.1 200 OK"));
+        assert!(plaintext.ends_with("Hello, World!"));
+        assert!(json.starts_with("HTTP/1.1 200 OK"));
+        assert!(json.contains("Content-Type: application/json"));
     }
 }
