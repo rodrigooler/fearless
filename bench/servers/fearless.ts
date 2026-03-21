@@ -4,8 +4,12 @@ const port = Number(process.env.PORT ?? 4101);
 
 const app = new App({ port, host: "127.0.0.1" });
 
-app.get("/", (_req, res) => {
+app.get("/plaintext", (_req, res) => {
   res.text("Hello, World!");
+});
+
+app.get("/json", (_req, res) => {
+  res.json({ message: "Hello, World!" });
 });
 
 app.listen((socket) => {
