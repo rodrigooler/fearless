@@ -2,11 +2,15 @@ import { App } from "../../src/index.js";
 
 const port = Number(process.env.PORT ?? 4101);
 
-const app = new App({ port, host: "127.0.0.1", engine: "rust" });
+const app = new App({ port, host: "127.0.0.1" });
 
-app.text("/plaintext", "Hello, World!");
+app.get("/plaintext", (_req, res) => {
+  res.setHeader("server", "Elysia").text("Hello, World!");
+});
 
-app.json("/json", { message: "Hello, World!" });
+app.get("/json", (_req, res) => {
+  res.setHeader("server", "Elysia").json({ message: "Hello, World!" });
+});
 
 app.listen((socket) => {
   if (socket) {

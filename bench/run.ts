@@ -370,10 +370,10 @@ async function main(): Promise<void> {
 
   const startedAt = new Date();
   console.log(
-    `TechEmpower-style local benchmark on Node ${process.version}, ` +
+    `TechEmpower Elysia-style benchmark on Node ${process.version}, ` +
       `${connections} connections, ${durationSec}s measure, ${warmupSec}s warmup, ${runsPerCase} runs/case`
   );
-  console.log("Metrics captured: requests/sec, latency avg/p99, errors, mismatches, non-2xx");
+  console.log("Case shape: /plaintext and /json, server header, JSON serialized per request");
   console.log(
     `Reference target: ${ELYSIA_REFERENCE_NAME} ${ELYSIA_REFERENCE_REQUESTS_PER_SEC.toLocaleString("en-US")} req/s`
   );
