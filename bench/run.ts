@@ -6,7 +6,7 @@ import autocannon from "autocannon";
 
 const exec = promisify(setTimeout);
 
-type FrameworkName = "fearless" | "elysia";
+type FrameworkName = "fearless";
 
 interface BenchmarkResult {
   framework: FrameworkName;
@@ -26,11 +26,9 @@ const serverDir = new URL("./servers/", import.meta.url);
 const connections = Number(process.env.BENCH_CONNECTIONS ?? 100);
 const duration = Number(process.env.BENCH_DURATION ?? 10);
 const benchmarkUrlPath = "/";
-const benchmarkBody = "Hello, World!";
 
 const servers: ServerSpec[] = [
   { name: "fearless", port: 4101, script: fileURLToPath(new URL("fearless.ts", serverDir)) },
-  { name: "elysia", port: 4102, script: fileURLToPath(new URL("elysia.ts", serverDir)) },
 ];
 
 function logSection(title: string): void {
