@@ -4,6 +4,7 @@ import type { OutgoingResponse } from "./types.js";
 export class Response implements OutgoingResponse {
   private _status = 200;
   private _headers: Record<string, string> = {};
+  private _ended = false;
 
   constructor(private res: UWSResponse) {}
 
@@ -54,6 +55,7 @@ export class Response implements OutgoingResponse {
         this.res.end(JSON.stringify(data));
       }
     });
+    this._ended = true;
     return this;
   }
 
@@ -71,5 +73,9 @@ export class Response implements OutgoingResponse {
 
   getResponse(): UWSResponse {
     return this.res;
+  }
+
+  isEnded(): boolean {
+    return this._ended;
   }
 }

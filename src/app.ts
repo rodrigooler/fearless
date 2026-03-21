@@ -43,6 +43,8 @@ export class App {
   private middlewares: Middleware[] = [];
   private rustServer: RustCoreServerHandle | null = null;
   private rustStartup: Promise<void> | null = null;
+  private uwsApp: TemplatedApp | null = null;
+  private uwsListenSocket: us_listen_socket | null = null;
   private config: Required<AppOptions> = {
     keyFileName: "",
     certFileName: "",
@@ -109,19 +111,35 @@ export class App {
   }
 
   private buildRouteHandlers(app: TemplatedApp): void {
+    const runMiddlewareStack = (
+      middlewareList: Middleware[],
+      microReq: Request,
+      microRes: Response,
+      finalAction: () => void | Promise<void>
+    ): void => {
+      if (middlewareList.length === 0) {
+        void finalAction();
+        return;
+      }
+
+      const runMiddlewares = async (index: number): Promise<void> => {
+        if (index >= middlewareList.length) {
+          await finalAction();
+          return;
+        }
+
+        const middleware = middlewareList[index];
+        const next = () => runMiddlewares(index + 1);
+        await middleware(microReq, microRes, next);
+      };
+
+      void runMiddlewares(0);
+    };
+
     for (const route of this.routes) {
       const uwsMethod = route.method.toLowerCase() as "get" | "post" | "put" | "delete" | "patch" | "options" | "head";
 
       const handler = (res: HttpResponse, req: HttpRequest) => {
-        if (route.kind === "static") {
-          const microRes = new Response(res);
-          microRes.setHeader("Content-Type", route.staticRoute!.contentType);
-          microRes.setHeaders(route.staticRoute!.headers);
-          microRes.status(route.staticRoute!.status);
-          microRes.end(route.staticRoute!.body);
-          return;
-        }
-
         const middlewareList =
           this.middlewares.length === 0
             ? route.middlewares
@@ -132,23 +150,19 @@ export class App {
         const microReq = new Request(req, res, route.paramNames);
         const microRes = new Response(res);
 
-        if (middlewareList.length === 0) {
-          void route.handler?.(microReq, microRes);
+        if (route.kind === "static") {
+          runMiddlewareStack(middlewareList, microReq, microRes, () => {
+            microRes.setHeader("Content-Type", route.staticRoute!.contentType);
+            microRes.setHeaders(route.staticRoute!.headers);
+            microRes.status(route.staticRoute!.status);
+            microRes.end(route.staticRoute!.body);
+          });
           return;
         }
 
-        const runMiddlewares = async (index: number): Promise<void> => {
-          if (index >= middlewareList.length) {
-            await route.handler?.(microReq, microRes);
-            return;
-          }
-
-          const middleware = middlewareList[index];
-          const next = () => runMiddlewares(index + 1);
-          await middleware(microReq, microRes, next);
-        };
-
-        void runMiddlewares(0);
+        runMiddlewareStack(middlewareList, microReq, microRes, async () => {
+          await route.handler?.(microReq, microRes);
+        });
       };
 
       switch (uwsMethod) {
@@ -174,6 +188,19 @@ export class App {
           app.head(route.path, handler);
           break;
       }
+    }
+
+    if (this.middlewares.length > 0) {
+      app.any("/*", (res, req) => {
+        const microReq = new Request(req, res, []);
+        const microRes = new Response(res);
+
+        runMiddlewareStack(this.middlewares, microReq, microRes, () => {
+          if (!microRes.isEnded()) {
+            microRes.status(404).end();
+          }
+        });
+      });
     }
   }
 
@@ -319,9 +346,13 @@ export class App {
         app = uWS.App();
       }
 
+      this.uwsApp = app;
       this.buildRouteHandlers(app);
 
       app.listen(this.config.host, this.config.port, (socket) => {
+        if (socket) {
+          this.uwsListenSocket = socket;
+        }
         if (callback) callback(socket);
       });
     });
@@ -337,6 +368,12 @@ export class App {
     if (this.rustServer) {
       await this.rustServer.stop();
       this.rustServer = null;
+    }
+
+    if (this.uwsApp) {
+      this.uwsApp.close();
+      this.uwsApp = null;
+      this.uwsListenSocket = null;
     }
 
     this.rustStartup = null;

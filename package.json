@@ -9,13 +9,21 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./dependencies": {
+      "types": "./dist/dependencies/index.d.ts",
+      "import": "./dist/dependencies/index.js"
+    },
+    "./dependencies/cors": {
+      "types": "./dist/dependencies/cors.d.ts",
+      "import": "./dist/dependencies/cors.js"
     }
   },
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\" && tsc",
     "dev": "tsx watch examples/basic.ts",
     "start": "node dist/examples/basic.js",
-    "test:js": "node --import tsx --test",
+    "test:js": "fnm exec --using=v22.22.1 node --import tsx --test",
     "test:rust": "cargo test --manifest-path rust-core/Cargo.toml",
     "test": "npm run test:js && npm run test:rust",
     "bench:tfb": "cd ../FrameworkBenchmarks && ./tfb --mode benchmark --test-dir TypeScript/fearless --type plaintext json --duration 10"
