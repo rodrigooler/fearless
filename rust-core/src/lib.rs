@@ -30,23 +30,17 @@ struct ResponseTemplate {
     close: Vec<u8>,
 }
 
-#[derive(Debug, Hash, Eq, PartialEq, Clone)]
-struct RouteKey {
+#[derive(Debug)]
+struct RouteEntry {
     method: String,
     path: String,
-}
-
-#[derive(Debug, Clone)]
-struct RouteTable {
-    routes: HashMap<RouteKey, ResponseTemplate>,
-    not_found: ResponseTemplate,
+    response: ResponseTemplate,
 }
 
 #[derive(Debug)]
-struct RequestHead {
-    method: String,
-    path: String,
-    close: bool,
+struct RouteTable {
+    routes: Vec<RouteEntry>,
+    not_found: ResponseTemplate,
 }
 
 pub fn load_manifest(path: impl AsRef<Path>) -> io::Result<Manifest> {
@@ -83,15 +77,15 @@ pub fn run_server(manifest: Manifest, port: u16) -> io::Result<()> {
 
 impl RouteTable {
     fn from_manifest(manifest: Manifest) -> Self {
-        let mut routes = HashMap::new();
+        let mut routes = Vec::with_capacity(manifest.routes.len());
 
         for route in manifest.routes {
             let response = ResponseTemplate::from_route(&route);
-            let key = RouteKey {
-                method: route.method.clone(),
-                path: route.path.clone(),
-            };
-            routes.insert(key, response);
+            routes.push(RouteEntry {
+                method: route.method,
+                path: route.path,
+                response,
+            });
         }
 
         let not_found = ResponseTemplate::from_parts(404, "text/plain", "Not Found", &HashMap::new());
@@ -100,12 +94,11 @@ impl RouteTable {
     }
 
     fn lookup(&self, method: &str, path: &str) -> &ResponseTemplate {
-        let key = RouteKey {
-            method: method.to_string(),
-            path: path.to_string(),
-        };
-
-        self.routes.get(&key).unwrap_or(&self.not_found)
+        self.routes
+            .iter()
+            .find(|route| route.method == method && route.path == path)
+            .map(|route| &route.response)
+            .unwrap_or(&self.not_found)
     }
 }
 
@@ -180,22 +173,63 @@ fn handle_connection(stream: TcpStream, table: Arc<RouteTable>) -> io::Result<()
     let reader_stream = stream.try_clone()?;
     let mut reader = BufReader::new(reader_stream);
     let mut writer = stream;
+    let mut request_line = String::new();
+    let mut header_line = String::new();
 
     loop {
-        let request = match read_request(&mut reader)? {
-            Some(request) => request,
-            None => break,
-        };
+        request_line.clear();
+        let bytes = reader.read_line(&mut request_line)?;
+        if bytes == 0 {
+            break;
+        }
 
-        let response = table.lookup(&request.method, &request.path);
-        let payload = if request.close {
-            &response.close
-        } else {
-            &response.keep_alive
-        };
+        if request_line == "\r\n" {
+            continue;
+        }
+
+        let request_line = request_line.trim_end_matches(['\r', '\n']);
+        let mut parts = request_line.split_whitespace();
+        let method = parts
+            .next()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing method"))?;
+        let path = parts
+            .next()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing path"))?;
+        let version = parts
+            .next()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing version"))?;
+
+        let mut close = version.eq_ignore_ascii_case("HTTP/1.0");
+
+        loop {
+            header_line.clear();
+            let bytes = reader.read_line(&mut header_line)?;
+            if bytes == 0 {
+                break;
+            }
+
+            let header = header_line.trim_end_matches(['\r', '\n']);
+            if header.is_empty() {
+                break;
+            }
+
+            if let Some((name, value)) = header.split_once(':') {
+                if name.eq_ignore_ascii_case("connection") {
+                    let value = value.trim();
+                    if value.eq_ignore_ascii_case("close") {
+                        close = true;
+                    } else if value.eq_ignore_ascii_case("keep-alive") {
+                        close = false;
+                    }
+                }
+            }
+        }
+
+        let response = table.lookup(method, path);
+        let payload = if close { &response.close } else { &response.keep_alive };
         writer.write_all(payload)?;
 
-        if request.close {
+        if close {
             writer.flush()?;
             break;
         }
@@ -214,68 +248,10 @@ fn is_disconnect_error(error: &io::Error) -> bool {
     )
 }
 
-fn read_request<R: BufRead>(reader: &mut R) -> io::Result<Option<RequestHead>> {
-    let mut request_line = String::new();
-    let bytes = reader.read_line(&mut request_line)?;
-    if bytes == 0 {
-        return Ok(None);
-    }
-
-    if request_line == "\r\n" {
-        return Ok(None);
-    }
-
-    let request_line = request_line.trim_end_matches(['\r', '\n']);
-    let mut parts = request_line.split_whitespace();
-    let method = parts
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing method"))?
-        .to_string();
-    let path = parts
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing path"))?
-        .to_string();
-    let version = parts
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing version"))?;
-
-    let mut close = version.eq_ignore_ascii_case("HTTP/1.0");
-
-    loop {
-        let mut header_line = String::new();
-        let bytes = reader.read_line(&mut header_line)?;
-        if bytes == 0 {
-            break;
-        }
-
-        let header_line = header_line.trim_end_matches(['\r', '\n']);
-        if header_line.is_empty() {
-            break;
-        }
-
-        if let Some((name, value)) = header_line.split_once(':') {
-            if name.eq_ignore_ascii_case("connection") {
-                let value = value.trim();
-                if value.eq_ignore_ascii_case("close") {
-                    close = true;
-                } else if value.eq_ignore_ascii_case("keep-alive") {
-                    close = false;
-                }
-            }
-        }
-    }
-
-    Ok(Some(RequestHead {
-        method,
-        path,
-        close,
-    }))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::collections::HashMap;
 
     #[test]
     fn renders_keep_alive_response() {
@@ -289,16 +265,11 @@ mod tests {
     }
 
     #[test]
-    fn parses_request_with_connection_close() {
-        let raw = b"GET /plaintext HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
-        let mut cursor = Cursor::new(raw.as_slice());
-        let request = read_request(&mut cursor)
-            .expect("request parsed")
-            .expect("request exists");
+    fn renders_close_response() {
+        let template = ResponseTemplate::from_parts(200, "text/plain", "Hello, World!", &HashMap::new());
+        let response = String::from_utf8(template.close).expect("valid utf8");
 
-        assert_eq!(request.method, "GET");
-        assert_eq!(request.path, "/plaintext");
-        assert!(request.close);
+        assert!(response.contains("Connection: close"));
     }
 
     #[test]
