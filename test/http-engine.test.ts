@@ -49,7 +49,7 @@ async function waitForTcp(port: number): Promise<void> {
   throw new Error(`Timed out waiting for 127.0.0.1:${port}`);
 }
 
-test("node engine serves static routes, params, query strings and json bodies", async () => {
+test("http runtime serves static routes, params, query strings and json bodies", async () => {
   const port = await getFreePort();
   const app = new App({ port, host: "127.0.0.1" });
   const UserSchema = type({
@@ -139,7 +139,7 @@ test("node engine serves static routes, params, query strings and json bodies", 
   }
 });
 
-test("static route middlewares run on the node engine", async () => {
+test("static route middlewares run on the http runtime", async () => {
   const port = await getFreePort();
   const app = new App({ port, host: "127.0.0.1" });
   const calls: string[] = [];

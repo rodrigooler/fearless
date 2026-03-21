@@ -142,7 +142,6 @@ export class App {
     passphrase: "",
     port: 3000,
     host: "0.0.0.0",
-    engine: "auto",
     rustCoreBinary: "",
   };
 
@@ -498,10 +497,7 @@ export class App {
   }
 
   listen(callback?: (started: boolean) => void): this {
-    const useRust =
-      this.config.engine === "rust" || (this.config.engine === "auto" && this.canUseRustRuntime());
-
-    if (useRust) {
+    if (this.canUseRustRuntime()) {
       this.rustStartup = (async () => {
         this.ensureRustStaticRoutesOnly();
 
