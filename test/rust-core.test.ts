@@ -49,9 +49,9 @@ async function waitForTcp(port: number): Promise<void> {
   throw new Error(`Timed out waiting for 127.0.0.1:${port}`);
 }
 
-test("Rust engine serves plaintext and json routes", async () => {
+test("default engine serves plaintext and json routes via Rust", async () => {
   const port = await getFreePort();
-  const app = new App({ port, host: "127.0.0.1", engine: "rust" });
+  const app = new App({ port, host: "127.0.0.1" });
 
   app.text("/plaintext", "Hello, World!");
   app.json("/json", { message: "Hello, World!" });

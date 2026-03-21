@@ -142,7 +142,7 @@ export class App {
     passphrase: "",
     port: 3000,
     host: "0.0.0.0",
-    engine: "node",
+    engine: "auto",
     rustCoreBinary: "",
   };
 
@@ -264,6 +264,14 @@ export class App {
     }
 
     return [...this.middlewares, ...routeMiddlewares];
+  }
+
+  private canUseRustRuntime(): boolean {
+    if (this.middlewares.length > 0) {
+      return false;
+    }
+
+    return this.routes.every((route) => route.kind === "static" && route.middlewares.length === 0);
   }
 
   private async runMiddlewareStack(
@@ -490,7 +498,10 @@ export class App {
   }
 
   listen(callback?: (started: boolean) => void): this {
-    if (this.config.engine === "rust") {
+    const useRust =
+      this.config.engine === "rust" || (this.config.engine === "auto" && this.canUseRustRuntime());
+
+    if (useRust) {
       this.rustStartup = (async () => {
         this.ensureRustStaticRoutesOnly();
 

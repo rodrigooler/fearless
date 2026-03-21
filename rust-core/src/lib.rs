@@ -4,7 +4,7 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -48,18 +48,39 @@ pub fn run_server(manifest: Manifest, port: u16) -> io::Result<()> {
     listener.set_nonblocking(false)?;
 
     let table = Arc::new(RouteTable::from_manifest(manifest));
+    let (sender, receiver) = mpsc::channel::<TcpStream>();
+    let receiver = Arc::new(Mutex::new(receiver));
+    let worker_count = thread::available_parallelism().map(|count| count.get()).unwrap_or(1).max(1);
+
+    for _ in 0..worker_count {
+        let table = Arc::clone(&table);
+        let receiver = Arc::clone(&receiver);
+
+        thread::spawn(move || loop {
+            let stream = match receiver.lock() {
+                Ok(lock) => lock.recv(),
+                Err(_) => return,
+            };
+
+            let stream = match stream {
+                Ok(stream) => stream,
+                Err(_) => return,
+            };
+
+            if let Err(error) = handle_connection(stream, Arc::clone(&table)) {
+                if !is_disconnect_error(&error) {
+                    eprintln!("connection error: {error}");
+                }
+            }
+        });
+    }
 
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {
-                let table = Arc::clone(&table);
-                thread::spawn(move || {
-                    if let Err(error) = handle_connection(stream, table) {
-                        if !is_disconnect_error(&error) {
-                            eprintln!("connection error: {error}");
-                        }
-                    }
-                });
+                if sender.send(stream).is_err() {
+                    break;
+                }
             }
             Err(error) => return Err(error),
         }
