@@ -18,17 +18,14 @@
     "test:js": "node --import tsx --test",
     "test:rust": "cargo test --manifest-path rust-core/Cargo.toml",
     "test": "npm run test:js && npm run test:rust",
-    "bench": "fnm exec --using=v22.22.1 tsx bench/run.ts"
+    "bench:tfb": "cd ../FrameworkBenchmarks && ./tfb --mode benchmark --test-dir TypeScript/fearless --type plaintext json --duration 10"
   },
   "dependencies": {
     "arktype": "^2.0.0-rc.27",
-    "elysia": "^1.4.28",
     "uWebSockets.js": "uNetworking/uWebSockets.js#v20.51.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "autocannon": "^8.0.0",
-    "elysia": "^1.4.28",
     "tsx": "^4.0.0",
     "typescript": "^5.0.0"
   },

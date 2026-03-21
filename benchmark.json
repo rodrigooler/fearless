@@ -1,0 +1,28 @@
+{
+  "source": {
+    "name": "TechEmpower FrameworkBenchmarks",
+    "path": "../FrameworkBenchmarks"
+  },
+  "latestRun": {
+    "timestamp": "2026-03-21T20:47:39-03:00",
+    "resultsFile": "../FrameworkBenchmarks/results/20260321204739/results.json",
+    "testDir": "TypeScript/fearless",
+    "tests": [
+      "plaintext",
+      "json"
+    ],
+    "durationSec": 10,
+    "summary": {
+      "plaintext": {
+        "bestRequestsPerSec": 3004513.97,
+        "bestConcurrency": 256,
+        "bestLatencyAvgMs": 6.78
+      },
+      "json": {
+        "bestRequestsPerSec": 736531.06,
+        "bestConcurrency": 512,
+        "bestLatencyAvgMs": 1.96
+      }
+    }
+  }
+}

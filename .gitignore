@@ -4,3 +4,4 @@ dist
 rust-core/target
 .DS_Store
 *.log
+FrameworkBenchmarks/
