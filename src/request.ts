@@ -1,15 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import type { BodyValidator, Headers, HttpMethod, QueryParams, IncomingRequest } from "./types.js";
-
-function normalizePath(url: string): string {
-  const questionIndex = url.indexOf("?");
-  const path = questionIndex === -1 ? url : url.slice(0, questionIndex);
-  if (!path || path === "/") {
-    return "/";
-  }
-
-  return path.startsWith("/") ? path.replace(/\/+$/, "") || "/" : `/${path.replace(/\/+$/, "")}`;
-}
+import { normalizePath } from "./path.js";
 
 function normalizeIp(address: string | undefined): string {
   if (!address) {
@@ -162,6 +153,14 @@ export class Request implements IncomingRequest {
     return this._bodyPromise;
   }
 
+  private parseJsonBody(raw: string): { ok: true; value: unknown } | { ok: false } {
+    try {
+      return { ok: true, value: raw.length > 0 ? JSON.parse(raw) : null };
+    } catch {
+      return { ok: false };
+    }
+  }
+
   async parseBodyRaw<T = unknown>(schema: BodyValidator<T>): Promise<T | null> {
     if (this._bodyParsed) {
       return this._body as T | null;
@@ -173,15 +172,13 @@ export class Request implements IncomingRequest {
       return null;
     }
 
-    let body: unknown;
-    try {
-      body = raw.length > 0 ? JSON.parse(raw) : null;
-    } catch {
+    const parsed = this.parseJsonBody(raw);
+    if (!parsed.ok) {
       this.setBody(null);
       return null;
     }
 
-    const result = schema(body);
+    const result = schema(parsed.value);
     if (result === null || result === undefined) {
       this.setBody(null);
       return null;

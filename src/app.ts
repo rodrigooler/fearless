@@ -3,6 +3,7 @@ import { createServer as createHttpServer, type IncomingMessage, type Server as 
 import { createServer as createHttpsServer } from "node:https";
 import { Request } from "./request.js";
 import { Response } from "./response.js";
+import { normalizePath } from "./path.js";
 import type { AppOptions, Handler, HttpMethod, Middleware, RouteOptions } from "./types.js";
 import { startRustCoreServer, type RustCoreServerHandle, type RustStaticRoute } from "./rust-core.js";
 
@@ -22,13 +23,12 @@ interface RouteMatch {
 interface CompiledPath {
   normalized: string;
   segments: RouteSegment[];
-  paramNames: string[];
+  hasParams: boolean;
 }
 
 interface RouteHandler {
   kind: "dynamic" | "static";
   method: HttpMethod;
-  path: string;
   handler?: Handler;
   middlewares: Middleware[];
   staticRoute?: StaticRouteConfig;
@@ -50,25 +50,6 @@ function createValidator<T>(validator: (data: unknown) => T | null | undefined):
   };
 }
 
-function normalizePath(path: string): string {
-  if (!path || path === "/") {
-    return "/";
-  }
-
-  let normalized = path;
-  const queryIndex = normalized.indexOf("?");
-  if (queryIndex !== -1) {
-    normalized = normalized.slice(0, queryIndex);
-  }
-
-  if (!normalized.startsWith("/")) {
-    normalized = `/${normalized}`;
-  }
-
-  normalized = normalized.replace(/\/+$/, "");
-  return normalized.length === 0 ? "/" : normalized;
-}
-
 function splitPath(path: string): string[] {
   const normalized = normalizePath(path);
   if (normalized === "/") {
@@ -80,18 +61,24 @@ function splitPath(path: string): string[] {
 
 function compilePath(path: string): CompiledPath {
   const normalized = normalizePath(path);
-  const segments = splitPath(normalized).map<RouteSegment>((segment) => {
+  const rawSegments = splitPath(normalized);
+  const segments: RouteSegment[] = [];
+  let hasParams = false;
+
+  for (const segment of rawSegments) {
     if (segment.startsWith(":")) {
-      return { kind: "param", value: segment.slice(1) };
+      hasParams = true;
+      segments.push({ kind: "param", value: segment.slice(1) });
+      continue;
     }
 
-    return { kind: "static", value: segment };
-  });
+    segments.push({ kind: "static", value: segment });
+  }
 
   return {
     normalized,
     segments,
-    paramNames: segments.filter((segment) => segment.kind === "param").map((segment) => segment.value),
+    hasParams,
   };
 }
 
@@ -127,7 +114,7 @@ function matchCompiledPath(route: CompiledPath, path: string): Record<string, st
 export class App {
   private routes: RouteHandler[] = [];
   private exactRoutes = new Map<string, RouteHandler>();
-  private paramRoutes: RouteHandler[] = [];
+  private paramRoutesByMethod: Partial<Record<HttpMethod, RouteHandler[]>> = {};
   private middlewares: Middleware[] = [];
   private rustServer: RustCoreServerHandle | null = null;
   private rustStartup: Promise<void> | null = null;
@@ -152,10 +139,15 @@ export class App {
   private addRoute(route: RouteHandler): this {
     this.routes.push(route);
 
-    if (route.compiledPath.paramNames.length === 0) {
+    if (!route.compiledPath.hasParams) {
       this.exactRoutes.set(this.routeKey(route.method, route.compiledPath.normalized), route);
     } else {
-      this.paramRoutes.push(route);
+      const bucket = this.paramRoutesByMethod[route.method];
+      if (bucket) {
+        bucket.push(route);
+      } else {
+        this.paramRoutesByMethod[route.method] = [route];
+      }
     }
 
     return this;
@@ -165,7 +157,6 @@ export class App {
     return this.addRoute({
       kind: "dynamic",
       method,
-      path,
       handler,
       middlewares: options.middlewares || [],
       compiledPath: compilePath(path),
@@ -181,7 +172,6 @@ export class App {
     return this.addRoute({
       kind: "static",
       method,
-      path,
       handler: undefined,
       middlewares: options.middlewares || [],
       staticRoute,
@@ -212,36 +202,31 @@ export class App {
       }
     }
 
-    for (const route of this.paramRoutes) {
-      if (route.method !== method) {
-        continue;
-      }
-
-      const params = matchCompiledPath(route.compiledPath, normalizedPath);
-      if (params) {
-        return {
-          route,
-          params,
-          suppressBody: method === "HEAD",
-        };
-      }
+    const routeMatch = this.findParamRoute(method, normalizedPath, method === "HEAD");
+    if (routeMatch) {
+      return routeMatch;
     }
 
     if (method !== "HEAD") {
       return null;
     }
 
-    for (const route of this.paramRoutes) {
-      if (route.method !== "GET") {
-        continue;
-      }
+    return this.findParamRoute("GET", normalizedPath, true);
+  }
 
-      const params = matchCompiledPath(route.compiledPath, normalizedPath);
+  private findParamRoute(method: HttpMethod, path: string, suppressBody: boolean): RouteMatch | null {
+    const routes = this.paramRoutesByMethod[method];
+    if (!routes) {
+      return null;
+    }
+
+    for (const route of routes) {
+      const params = matchCompiledPath(route.compiledPath, path);
       if (params) {
         return {
           route,
           params,
-          suppressBody: true,
+          suppressBody,
         };
       }
     }
@@ -261,8 +246,8 @@ export class App {
     return [...this.middlewares, ...routeMiddlewares];
   }
 
-  private canUseRustRuntime(): boolean {
-    if (this.middlewares.length > 0) {
+  private canUseRustRuntime(useHttps: boolean): boolean {
+    if (useHttps || this.middlewares.length > 0) {
       return false;
     }
 
@@ -321,62 +306,79 @@ export class App {
     await dispatch(0);
   }
 
-  private async handleNodeRequest(nodeReq: IncomingMessage, nodeRes: ServerResponse): Promise<void> {
-    const method = (nodeReq.method || "GET").toUpperCase() as HttpMethod;
-    const routeMatch = this.findRoute(method, nodeReq.url || "/");
-
-    if (!routeMatch) {
-      const request = new Request(nodeReq);
-      const response = new Response(nodeRes);
-
-      try {
-        if (this.middlewares.length > 0) {
-          await this.runMiddlewareStack(this.middlewares, request, response, async () => {
-            if (!response.isEnded()) {
-              response.status(404).end();
-            }
-          });
-        } else {
+  private async sendNotFound(request: Request, response: Response): Promise<void> {
+    if (this.middlewares.length > 0) {
+      await this.runMiddlewareStack(this.middlewares, request, response, async () => {
+        if (!response.isEnded()) {
           response.status(404).end();
         }
-      } catch (error) {
-        if (!response.isEnded()) {
-          response.status(500).end("Internal Server Error");
-        }
-        console.error(error);
-      }
-
+      });
       return;
     }
 
-    const request = new Request(nodeReq, routeMatch.params);
-    const response = new Response(nodeRes, routeMatch.suppressBody);
-    const middlewareList = this.mergeMiddlewares(routeMatch.route.middlewares);
+    response.status(404).end();
+  }
 
-    try {
-      if (routeMatch.route.kind === "static") {
-        await this.runMiddlewareStack(middlewareList, request, response, async () => {
-          const staticRoute = routeMatch.route.staticRoute;
-          if (!staticRoute) {
-            return;
-          }
-
-          response.setHeader("Content-Type", staticRoute.contentType);
-          response.setHeaders(staticRoute.headers);
-          response.status(staticRoute.status);
-          response.end(staticRoute.body);
-        });
+  private async sendStaticRoute(
+    staticRoute: StaticRouteConfig | undefined,
+    middlewareList: Middleware[],
+    request: Request,
+    response: Response
+  ): Promise<void> {
+    await this.runMiddlewareStack(middlewareList, request, response, async () => {
+      if (!staticRoute) {
         return;
       }
 
-      await this.runMiddlewareStack(middlewareList, request, response, async () => {
-        await routeMatch.route.handler?.(request, response);
-      });
-    } catch (error) {
-      if (!response.isEnded()) {
-        response.status(500).end("Internal Server Error");
+      response.setHeader("Content-Type", staticRoute.contentType);
+      response.setHeaders(staticRoute.headers);
+      response.status(staticRoute.status);
+      response.end(staticRoute.body);
+    });
+  }
+
+  private async sendDynamicRoute(
+    handler: Handler | undefined,
+    middlewareList: Middleware[],
+    request: Request,
+    response: Response
+  ): Promise<void> {
+    await this.runMiddlewareStack(middlewareList, request, response, async () => {
+      await handler?.(request, response);
+    });
+  }
+
+  private handleRequestError(response: Response, error: unknown): void {
+    if (!response.isEnded()) {
+      response.status(500).end("Internal Server Error");
+    }
+    console.error(error);
+  }
+
+  private async handleNodeRequest(nodeReq: IncomingMessage, nodeRes: ServerResponse): Promise<void> {
+    const method = (nodeReq.method || "GET").toUpperCase() as HttpMethod;
+    const routeMatch = this.findRoute(method, nodeReq.url || "/");
+    const request = new Request(nodeReq, routeMatch?.params ?? {});
+    const response = new Response(nodeRes, routeMatch?.suppressBody ?? false);
+
+    try {
+      if (!routeMatch) {
+        await this.sendNotFound(request, response);
+        return;
       }
-      console.error(error);
+
+      const middlewareList = this.mergeMiddlewares(routeMatch.route.middlewares);
+
+      switch (routeMatch.route.kind) {
+        case "static":
+          await this.sendStaticRoute(routeMatch.route.staticRoute, middlewareList, request, response);
+          return;
+        case "dynamic":
+          await this.sendDynamicRoute(routeMatch.route.handler, middlewareList, request, response);
+          return;
+      }
+    } catch (error) {
+      this.handleRequestError(response, error);
     }
   }
 
@@ -406,7 +408,7 @@ export class App {
 
       routes.push({
         method: route.method,
-        path: route.path,
+        path: route.compiledPath.normalized,
         contentType: route.staticRoute.contentType,
         body: route.staticRoute.body,
         headers: route.staticRoute.headers,
@@ -493,7 +495,9 @@ export class App {
   }
 
   listen(callback?: (started: boolean) => void): this {
-    if (this.canUseRustRuntime()) {
+    const useHttps = Boolean(this.config.keyFileName || this.config.certFileName);
+
+    if (this.canUseRustRuntime(useHttps)) {
       this.rustStartup = (async () => {
         this.ensureRustStaticRoutesOnly();
 
@@ -520,7 +524,6 @@ export class App {
       void this.handleNodeRequest(nodeReq, nodeRes);
     };
 
-    const useHttps = Boolean(this.config.keyFileName || this.config.certFileName);
     if (useHttps) {
       if (!this.config.keyFileName || !this.config.certFileName) {
         throw new Error("Both keyFileName and certFileName are required for HTTPS");

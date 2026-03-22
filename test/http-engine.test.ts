@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import https from "node:https";
 import net from "node:net";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { App, securityHeaders } from "../src/index.js";
 
@@ -63,6 +65,40 @@ async function waitForTcp(port: number): Promise<void> {
   }
 
   throw new Error(`Timed out waiting for 127.0.0.1:${port}`);
+}
+
+const tlsKeyFile = fileURLToPath(new URL("./fixtures/tls/server-key.pem", import.meta.url));
+const tlsCertFile = fileURLToPath(new URL("./fixtures/tls/server-cert.pem", import.meta.url));
+
+async function httpsGet(
+  port: number,
+  path: string
+): Promise<{ statusCode: number; body: string; headers: Record<string, string | string[] | undefined> }> {
+  return await new Promise((resolve, reject) => {
+    const request = https.request(
+      {
+        host: "127.0.0.1",
+        port,
+        path,
+        method: "GET",
+        rejectUnauthorized: false,
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        response.on("end", () => {
+          resolve({
+            statusCode: response.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString("utf8"),
+            headers: response.headers,
+          });
+        });
+      }
+    );
+
+    request.on("error", reject);
+    request.end();
+  });
 }
 
 test("http runtime serves static routes, params, query strings and json bodies", async () => {
@@ -180,6 +216,30 @@ test("static route middlewares run on the http runtime", async () => {
     assert.equal(await response.text(), "ok");
     assert.equal(response.headers.get("x-protected"), "yes");
     assert.deepEqual(calls, ["route:before", "route:after"]);
+  } finally {
+    await app.close();
+  }
+});
+
+test("https runtime serves static routes when tls is configured", async () => {
+  const port = await getFreePort();
+  const app = new App({
+    port,
+    host: "127.0.0.1",
+    keyFileName: tlsKeyFile,
+    certFileName: tlsCertFile,
+  });
+
+  app.text("/secure", "ok");
+  app.listen();
+
+  try {
+    await waitForTcp(port);
+
+    const response = await httpsGet(port, "/secure");
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.body, "ok");
+    assert.equal(response.headers["content-type"], "text/plain");
   } finally {
     await app.close();
   }
