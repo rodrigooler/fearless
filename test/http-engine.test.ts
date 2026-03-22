@@ -1,7 +1,23 @@
 import assert from "node:assert/strict";
 import net from "node:net";
 import test from "node:test";
-import { type, App, securityHeaders } from "../src/index.js";
+import { App, securityHeaders } from "../src/index.js";
+
+function parseUser(data: unknown): { name: string; role: string } | null {
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+
+  const candidate = data as Record<string, unknown>;
+  if (typeof candidate.name !== "string" || typeof candidate.role !== "string") {
+    return null;
+  }
+
+  return {
+    name: candidate.name,
+    role: candidate.role,
+  };
+}
 
 async function getFreePort(): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
@@ -52,10 +68,6 @@ async function waitForTcp(port: number): Promise<void> {
 test("http runtime serves static routes, params, query strings and json bodies", async () => {
   const port = await getFreePort();
   const app = new App({ port, host: "127.0.0.1" });
-  const UserSchema = type({
-    name: "string",
-    role: "string",
-  });
 
   app.use(securityHeaders());
 
@@ -71,7 +83,7 @@ test("http runtime serves static routes, params, query strings and json bodies",
   app.post(
     "/users/:id",
     async (req, res) => {
-      const body = await req.parseBodyRaw(UserSchema);
+      const body = await req.parseBodyRaw(parseUser);
       if (!body) {
         return res.status(400).json({ error: "invalid body" });
       }

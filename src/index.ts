@@ -1,4 +1,4 @@
-export { App, type, createValidator } from "./app.js";
+export { App, createValidator } from "./app.js";
 export { Request } from "./request.js";
 export { Response } from "./response.js";
 export { startRustCoreServer } from "./rust-core.js";
@@ -15,7 +15,6 @@ export type {
   AppOptions,
   JsonBody,
 } from "./types.js";
-export type { ArktypeSchema, ArktypeValidator } from "./app.js";
 export type {
   RustCoreManifest,
   RustCoreServerHandle,

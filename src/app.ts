@@ -1,4 +1,3 @@
-import { ArkErrors, type } from "arktype";
 import { readFileSync } from "node:fs";
 import { createServer as createHttpServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
@@ -6,8 +5,6 @@ import { Request } from "./request.js";
 import { Response } from "./response.js";
 import type { AppOptions, Handler, HttpMethod, Middleware, RouteOptions } from "./types.js";
 import { startRustCoreServer, type RustCoreServerHandle, type RustStaticRoute } from "./rust-core.js";
-
-type ArktypeSchema = unknown;
 
 interface StaticRouteConfig {
   contentType: string;
@@ -40,14 +37,13 @@ interface RouteHandler {
 
 type RouteSegment = { kind: "static"; value: string } | { kind: "param"; value: string };
 
-type ArktypeValidator = (data: unknown) => { ok: true; data: unknown } | { ok: false; errors: ArkErrors };
+type ValidationResult<T> = { ok: true; data: T } | { ok: false; errors: string };
 
-function createValidator(schema: ArktypeSchema): ArktypeValidator {
-  const validator = type(schema as never);
+function createValidator<T>(validator: (data: unknown) => T | null | undefined): (data: unknown) => ValidationResult<T> {
   return (data: unknown) => {
     const result = validator(data);
-    if (result instanceof ArkErrors) {
-      return { ok: false, errors: result };
+    if (result === null || result === undefined) {
+      return { ok: false, errors: "Invalid payload" };
     }
 
     return { ok: true, data: result };
@@ -587,8 +583,7 @@ export class App {
   }
 }
 
-export { type, createValidator };
-export type { ArktypeSchema, ArktypeValidator };
+export { createValidator };
 export { Request } from "./request.js";
 export { Response } from "./response.js";
 export type {

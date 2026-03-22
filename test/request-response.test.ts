@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { type, createValidator, Request, Response } from "../src/index.js";
+import { createValidator, Request, Response } from "../src/index.js";
 import test from "node:test";
 
 class FakeIncomingMessage extends EventEmitter {
@@ -62,8 +62,23 @@ test("Request exposes normalized path, query, headers, params and body parsing",
     "x-request-id": "abc",
   });
 
-  const schema = type({ name: "string", role: "string" });
-  const bodyPromise = request.parseBodyRaw(schema);
+  const parseUser = (data: unknown) => {
+    if (!data || typeof data !== "object") {
+      return null;
+    }
+
+    const candidate = data as Record<string, unknown>;
+    if (typeof candidate.name !== "string" || typeof candidate.role !== "string") {
+      return null;
+    }
+
+    return {
+      name: candidate.name,
+      role: candidate.role,
+    };
+  };
+
+  const bodyPromise = request.parseBodyRaw(parseUser);
   req.emit("data", Buffer.from('{"name":"Ada","role":"admin"}'));
   req.emit("end");
 
@@ -72,12 +87,23 @@ test("Request exposes normalized path, query, headers, params and body parsing",
   assert.deepEqual(request.body, { name: "Ada", role: "admin" });
   assert.equal(request.bodyParsed, true);
 
-  const parsedAgain = await request.json(schema);
+  const parsedAgain = await request.json(parseUser);
   assert.deepEqual(parsedAgain, { name: "Ada", role: "admin" });
 });
 
 test("createValidator returns success and failure states", () => {
-  const validator = createValidator(type({ name: "string" }));
+  const validator = createValidator((data: unknown) => {
+    if (!data || typeof data !== "object") {
+      return null;
+    }
+
+    const candidate = data as Record<string, unknown>;
+    if (typeof candidate.name !== "string") {
+      return null;
+    }
+
+    return { name: candidate.name };
+  });
 
   const valid = validator({ name: "Ada" });
   const invalid = validator({ name: 42 });

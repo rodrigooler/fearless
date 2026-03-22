@@ -1,8 +1,6 @@
-import type { ArkErrors } from "arktype";
-
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "OPTIONS" | "HEAD";
 
-export type BodyValidator<T = unknown> = (data: unknown) => T | ArkErrors;
+export type BodyValidator<T = unknown> = (data: unknown) => T | null | undefined;
 
 export type JsonBody = {
   body: unknown | null;

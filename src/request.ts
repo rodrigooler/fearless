@@ -1,4 +1,3 @@
-import { ArkErrors } from "arktype";
 import type { IncomingMessage } from "node:http";
 import type { BodyValidator, Headers, HttpMethod, QueryParams, IncomingRequest } from "./types.js";
 
@@ -183,7 +182,7 @@ export class Request implements IncomingRequest {
     }
 
     const result = schema(body);
-    if (result instanceof ArkErrors) {
+    if (result === null || result === undefined) {
       this.setBody(null);
       return null;
     }
