@@ -1,6 +1,6 @@
 {
   "name": "microu",
-  "version": "1.0.0",
+  "version": "0.2.2",
   "description": "Fast, minimalist TypeScript framework with a Rust hot path and built-in helpers",
   "type": "module",
   "main": "dist/index.js",
