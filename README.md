@@ -14,6 +14,34 @@ Fearless combines three layers:
 
 That split keeps the framework flexible without forcing every request through a large abstraction stack.
 
+## Repository & Install
+
+Main repository:
+
+- [https://github.com/rodrigooler/fearless](https://github.com/rodrigooler/fearless)
+
+If you want to install directly from Git in another project, use:
+
+```json
+{
+  "dependencies": {
+    "fearless": "git+https://github.com/rodrigooler/fearless.git#main"
+  }
+}
+```
+
+Or with npm:
+
+```bash
+npm install git+https://github.com/rodrigooler/fearless.git#main
+```
+
+### Do I need Rust installed?
+
+- If you use the Rust hot path from source, yes, you need a Rust toolchain available because the framework compiles the Rust core when it starts.
+- If you provide a prebuilt binary through `rustCoreBinary`, the framework will use that binary instead of building locally.
+- If you only use the Node/TypeScript parts of the framework and never start the Rust-backed runtime, you may not need Rust on that machine.
+
 ## Why It Exists
 
 Most frameworks optimize for breadth. Fearless optimizes for two things at the same time:
