@@ -4,6 +4,13 @@ Fearless is a small TypeScript-first framework with a Rust hot path underneath. 
 
 The design goal is not to ship a giant ecosystem of batteries and wrappers. The goal is to give you a fast core, a small set of built-in helpers, and enough room to choose your own validation and application-level abstractions.
 
+## Project Docs
+
+- [License](./LICENSE)
+- [Contributing](./CONTRIBUTING.md)
+- [Contributors](./CONTRIBUTORS.md)
+- [Pull Request Template](./.github/PULL_REQUEST_TEMPLATE.md)
+
 ## What It Is
 
 Fearless combines three layers:
