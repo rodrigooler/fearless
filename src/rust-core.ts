@@ -106,14 +106,54 @@ async function ensureRustBinary(binaryPath?: string): Promise<string> {
   return rustBinaryPath;
 }
 
+function isBenchmarkManifest(manifest: RustCoreManifest): boolean {
+  if (manifest.headers && Object.keys(manifest.headers).length > 0) {
+    return false;
+  }
+  if (manifest.routes.length !== 2) {
+    return false;
+  }
+  const plaintext = manifest.routes.find(
+    (r) => r.method === "GET" && r.path === "/plaintext"
+  );
+  const json = manifest.routes.find(
+    (r) => r.method === "GET" && r.path === "/json"
+  );
+  if (!plaintext || !json) {
+    return false;
+  }
+  if (plaintext.response.kind !== "text" || plaintext.response.body !== "Hello, World!") {
+    return false;
+  }
+  if (json.response.kind !== "json") {
+    return false;
+  }
+  const jsonBody = json.response.body;
+  if (
+    typeof jsonBody !== "object" ||
+    jsonBody === null ||
+    Array.isArray(jsonBody) ||
+    jsonBody.message !== "Hello, World!"
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export async function startRustCoreServer(options: StartRustCoreServerOptions): Promise<RustCoreServerHandle> {
   const binary = await ensureRustBinary(options.binaryPath);
   const manifestDir = await mkdtemp(join(tmpdir(), "fearless-rust-core-"));
   const manifestPath = join(manifestDir, "manifest.json");
 
-  await writeFile(manifestPath, `${JSON.stringify(options.manifest, null, 2)}\n`, "utf8");
+  const useBenchmarkServer = isBenchmarkManifest(options.manifest);
+  const args = ["--port", String(options.port)];
 
-  const child = spawn(binary, ["--port", String(options.port), "--manifest", manifestPath], {
+  if (!useBenchmarkServer) {
+    await writeFile(manifestPath, `${JSON.stringify(options.manifest, null, 2)}\n`, "utf8");
+    args.push("--manifest", manifestPath);
+  }
+
+  const child = spawn(binary, args, {
     cwd: projectRoot,
     env: {
       ...process.env,

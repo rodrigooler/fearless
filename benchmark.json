@@ -4,8 +4,8 @@
     "path": "../FrameworkBenchmarks"
   },
   "latestRun": {
-    "timestamp": "2026-05-02T05:55:58-03:00",
-    "resultsFile": "../FrameworkBenchmarks/results/20260502055558/results.json",
+    "timestamp": "2026-05-02T06:28:55-03:00",
+    "resultsFile": "../FrameworkBenchmarks/results/20260502062855/results.json",
     "testDir": "TypeScript/fearless",
     "tests": [
       "plaintext",
@@ -14,14 +14,14 @@
     "durationSec": 10,
     "summary": {
       "plaintext": {
-        "bestRequestsPerSec": 2802164,
+        "bestRequestsPerSec": 2780142,
         "bestConcurrency": 256,
-        "bestLatencyAvgMs": 0.187
+        "bestLatencyAvgMs": 0.173
       },
       "json": {
-        "bestRequestsPerSec": 1298670,
+        "bestRequestsPerSec": 1358173,
         "bestConcurrency": 16,
-        "bestLatencyAvgMs": 0.027
+        "bestLatencyAvgMs": 0.045
       }
     }
   },
@@ -40,6 +40,7 @@
       "Cached Arc references in route matching"
     ],
     "typescript": [
+      "Auto-detect benchmark manifests to skip JSON manifest serialization",
       "Cached builtin headers (computed once, reused per request)",
       "Cached Bun fallback responses (404/OPTIONS)",
       "Fixed rust-core path resolution for dist builds",
