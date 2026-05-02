@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "httpdate",
  "libc",
+ "memchr",
  "rustc-hash",
  "serde",
  "serde_json",
