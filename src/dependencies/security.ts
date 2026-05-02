@@ -1,4 +1,4 @@
-import type { Middleware } from "../types.js";
+import type { BuiltinFeature, BuiltinSecurityHeadersConfig } from "../types.js";
 
 export interface SecurityHeadersOptions {
   contentSecurityPolicy?: string | false;
@@ -9,32 +9,22 @@ export interface SecurityHeadersOptions {
   noSniff?: boolean;
 }
 
-export function securityHeaders(options: SecurityHeadersOptions = {}): Middleware {
-  return (_req, res, next) => {
-    if (options.noSniff !== false) {
-      res.setHeader("X-Content-Type-Options", "nosniff");
-    }
+function buildSecurityHeadersConfig(options: SecurityHeadersOptions): BuiltinSecurityHeadersConfig {
+  return {
+    contentSecurityPolicy: options.contentSecurityPolicy === false ? null : options.contentSecurityPolicy ?? null,
+    crossOriginOpenerPolicy:
+      options.crossOriginOpenerPolicy === false ? null : options.crossOriginOpenerPolicy ?? "same-origin",
+    crossOriginResourcePolicy:
+      options.crossOriginResourcePolicy === false ? null : options.crossOriginResourcePolicy ?? "same-origin",
+    referrerPolicy: options.referrerPolicy === false ? null : options.referrerPolicy ?? "no-referrer",
+    frameOptions: options.frameOptions === false ? null : options.frameOptions ?? "DENY",
+    noSniff: options.noSniff !== false,
+  };
+}
 
-    if (options.frameOptions !== false) {
-      res.setHeader("X-Frame-Options", options.frameOptions ?? "DENY");
-    }
-
-    if (options.referrerPolicy !== false) {
-      res.setHeader("Referrer-Policy", options.referrerPolicy ?? "no-referrer");
-    }
-
-    if (options.crossOriginOpenerPolicy !== false) {
-      res.setHeader("Cross-Origin-Opener-Policy", options.crossOriginOpenerPolicy ?? "same-origin");
-    }
-
-    if (options.crossOriginResourcePolicy !== false) {
-      res.setHeader("Cross-Origin-Resource-Policy", options.crossOriginResourcePolicy ?? "same-origin");
-    }
-
-    if (typeof options.contentSecurityPolicy === "string") {
-      res.setHeader("Content-Security-Policy", options.contentSecurityPolicy);
-    }
-
-    return next();
+export function securityHeaders(options: SecurityHeadersOptions = {}): BuiltinFeature {
+  return {
+    kind: "securityHeaders",
+    config: buildSecurityHeadersConfig(options),
   };
 }

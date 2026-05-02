@@ -49,9 +49,9 @@ async function waitForTcp(port: number): Promise<void> {
   throw new Error(`Timed out waiting for 127.0.0.1:${port}`);
 }
 
-test("cors middleware applies headers and answers preflight", async () => {
+test("cors builtin applies headers and answers preflight", async () => {
   const port = await getFreePort();
-  const app = new App({ port, host: "127.0.0.1" });
+  const app = new App({ port, host: "127.0.0.1", runtime: "node" });
 
   app.use(
     cors({
@@ -92,32 +92,25 @@ test("cors middleware applies headers and answers preflight", async () => {
   }
 });
 
-test("middlewares run in order and can decorate responses", async () => {
+test("builtin features decorate declarative responses", async () => {
   const port = await getFreePort();
-  const app = new App({ port, host: "127.0.0.1" });
-  const calls: string[] = [];
+  const app = new App({ port, host: "127.0.0.1", runtime: "node" });
 
-  app.use(async (_req, res, next) => {
-    calls.push("global:before");
-    res.setHeader("x-global", "yes");
-    await next();
-    calls.push("global:after");
-  });
-
-  app.get(
+  app.use(
+    cors({
+      origin: "https://example.com",
+      methods: ["GET", "OPTIONS"],
+      allowedHeaders: ["content-type"],
+    })
+  );
+  app.text(
     "/ordered",
-    (_req, res) => {
-      calls.push("handler");
-      res.text("ok");
-    },
+    "ok",
     {
-      middlewares: [
-        async (_req, _res, next) => {
-          calls.push("route:before");
-          await next();
-          calls.push("route:after");
-        },
-      ],
+      headers: {
+        "x-global": "yes",
+        "x-route": "yes",
+      },
     }
   );
 
@@ -129,7 +122,8 @@ test("middlewares run in order and can decorate responses", async () => {
     const response = await fetch(`http://127.0.0.1:${port}/ordered`);
     assert.equal(await response.text(), "ok");
     assert.equal(response.headers.get("x-global"), "yes");
-    assert.deepEqual(calls, ["global:before", "route:before", "handler", "route:after", "global:after"]);
+    assert.equal(response.headers.get("x-route"), "yes");
+    assert.equal(response.headers.get("access-control-allow-origin"), "https://example.com");
   } finally {
     await app.close();
   }

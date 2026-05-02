@@ -16,20 +16,36 @@ const rustBinaryPath = join(projectRoot, "rust-core", "target", "release", rustB
 export interface RustStaticRoute {
   method: string;
   path: string;
-  contentType: string;
-  body: string;
+  response: {
+    kind: "text" | "html" | "json";
+    body: import("./types.js").TemplateValue;
+    status?: number;
+    headers?: Record<string, string>;
+  };
   headers: Record<string, string>;
-  status: number;
+}
+
+export interface RustCorsManifest {
+  origin: string | null;
+  methods: string;
+  allowedHeaders: string | null;
+  exposedHeaders: string | null;
+  credentials: boolean;
+  maxAge: number | null;
+  optionsSuccessStatus: number;
 }
 
 export interface RustCoreManifest {
   routes: RustStaticRoute[];
+  headers?: Record<string, string>;
+  cors?: RustCorsManifest | null;
 }
 
 export interface StartRustCoreServerOptions {
   port: number;
   manifest: RustCoreManifest;
   binaryPath?: string;
+  startupTimeoutMs?: number;
 }
 
 export interface RustCoreServerHandle {
@@ -47,8 +63,8 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
-async function waitForTcp(port: number, host = "127.0.0.1"): Promise<void> {
-  const deadline = Date.now() + 15_000;
+async function waitForTcp(port: number, host = "127.0.0.1", timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
     try {
@@ -108,7 +124,16 @@ export async function startRustCoreServer(options: StartRustCoreServerOptions): 
   child.stdout.on("data", (chunk) => process.stdout.write(`[rust-core ${options.port}] ${chunk}`));
   child.stderr.on("data", (chunk) => process.stderr.write(`[rust-core ${options.port} ERROR] ${chunk}`));
 
-  await waitForTcp(options.port);
+  try {
+    await waitForTcp(options.port, "127.0.0.1", options.startupTimeoutMs);
+  } catch (error) {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+
+    await rm(manifestDir, { recursive: true, force: true });
+    throw error;
+  }
 
   return {
     child,

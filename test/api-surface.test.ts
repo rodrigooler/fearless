@@ -51,36 +51,21 @@ async function waitForTcp(port: number): Promise<void> {
 
 test("API surface covers all route verbs, listen callback and lifecycle", async () => {
   const port = await getFreePort();
-  const app = new App({ port, host: "127.0.0.1" });
+  const app = new App({ port, host: "127.0.0.1", runtime: "node" });
   let started = false;
 
-  app.get("/resource", (_req, res) => {
-    res.text("get");
+  app.get("/resource", { kind: "text", body: "get" });
+  app.post("/resource", { kind: "json", status: 201, body: { method: "POST" } });
+  app.put("/resource", { kind: "text", status: 202, body: "put" });
+  app.patch("/resource", { kind: "text", status: 203, body: "patch" });
+  app.delete("/resource", { kind: "text", status: 204, body: "" });
+  app.options("/resource", {
+    kind: "text",
+    status: 204,
+    body: "",
+    headers: { allow: "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD" },
   });
-
-  app.post("/resource", (_req, res) => {
-    res.status(201).json({ method: "POST" });
-  });
-
-  app.put("/resource", (_req, res) => {
-    res.status(202).text("put");
-  });
-
-  app.patch("/resource", (_req, res) => {
-    res.status(203).end("patch");
-  });
-
-  app.delete("/resource", (_req, res) => {
-    res.status(204).end();
-  });
-
-  app.options("/resource", (_req, res) => {
-    res.status(204).setHeader("allow", "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD").end();
-  });
-
-  app.head("/head", (_req, res) => {
-    res.status(200).text("hidden");
-  });
+  app.head("/head", { kind: "text", body: "hidden" });
 
   app.listen((ok) => {
     started = ok;

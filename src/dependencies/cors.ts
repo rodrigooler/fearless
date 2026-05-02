@@ -1,4 +1,4 @@
-import type { Middleware } from "../types.js";
+import type { BuiltinCorsConfig, BuiltinFeature } from "../types.js";
 
 export interface CorsOptions {
   origin?: string | boolean;
@@ -22,43 +22,24 @@ function serializeOrigin(origin: CorsOptions["origin"]): string | null {
   return origin;
 }
 
-export function cors(options: CorsOptions = {}): Middleware {
-  const origin = serializeOrigin(options.origin);
-  const methods = options.methods?.join(", ") ?? "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS";
-  const allowedHeaders = options.allowedHeaders?.join(", ");
-  const exposedHeaders = options.exposedHeaders?.join(", ");
-  const credentials = options.credentials === true;
-  const maxAge = options.maxAge;
-  const optionsSuccessStatus = options.optionsSuccessStatus ?? 204;
+function buildCorsConfig(options: CorsOptions): BuiltinCorsConfig {
+  return {
+    origin: serializeOrigin(options.origin),
+    methods: options.methods?.join(", ") ?? "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS",
+    allowedHeaders: options.allowedHeaders?.join(", ") ?? null,
+    exposedHeaders: options.exposedHeaders?.join(", ") ?? null,
+    credentials: options.credentials === true,
+    maxAge:
+      typeof options.maxAge === "number" && Number.isFinite(options.maxAge) && options.maxAge >= 0
+        ? Math.floor(options.maxAge)
+        : null,
+    optionsSuccessStatus: options.optionsSuccessStatus ?? 204,
+  };
+}
 
-  return (req, res, next) => {
-    if (origin) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-    }
-
-    res.setHeader("Access-Control-Allow-Methods", methods);
-
-    if (allowedHeaders) {
-      res.setHeader("Access-Control-Allow-Headers", allowedHeaders);
-    }
-
-    if (exposedHeaders) {
-      res.setHeader("Access-Control-Expose-Headers", exposedHeaders);
-    }
-
-    if (credentials) {
-      res.setHeader("Access-Control-Allow-Credentials", "true");
-    }
-
-    if (typeof maxAge === "number" && Number.isFinite(maxAge) && maxAge >= 0) {
-      res.setHeader("Access-Control-Max-Age", String(Math.floor(maxAge)));
-    }
-
-    if (req.method === "OPTIONS") {
-      res.status(optionsSuccessStatus).end();
-      return;
-    }
-
-    return next();
+export function cors(options: CorsOptions = {}): BuiltinFeature {
+  return {
+    kind: "cors",
+    config: buildCorsConfig(options),
   };
 }

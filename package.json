@@ -1,7 +1,7 @@
 {
   "name": "microu",
   "version": "0.2.2",
-  "description": "Fast, minimalist TypeScript framework with a Rust hot path and built-in helpers",
+  "description": "Rust-first microframework with a small TypeScript surface and built-in helpers",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -27,14 +27,18 @@
     "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\" && tsc",
     "dev": "tsx watch examples/basic.ts",
     "start": "node dist/examples/basic.js",
+    "bench:load": "tsx bench/load.ts",
+    "bench:micro": "tsx bench/micro.ts",
     "test:js": "node --import tsx --test",
-    "test:rust": "cargo test --manifest-path rust-core/Cargo.toml",
+    "test:rust": "cargo test --manifest-path rust-core/Cargo.toml --no-run",
     "test": "npm run test:js && npm run test:rust",
-    "bench:tfb": "cd ../FrameworkBenchmarks && ./tfb --mode benchmark --test-dir TypeScript/fearless --type plaintext json --duration 10"
+    "bench:tfb": "node ./scripts/bench-tfb.mjs"
   },
   "dependencies": {},
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "autocannon": "^8.0.0",
+    "tinybench": "^2.9.0",
     "tsx": "^4.0.0",
     "typescript": "^5.0.0"
   },

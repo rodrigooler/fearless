@@ -1,4 +1,39 @@
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "OPTIONS" | "HEAD";
+export type RuntimeMode = "auto" | "node" | "rust";
+export type HttpVersion = "auto" | "1.1" | "2";
+
+export type TemplatePrimitive = string | number | boolean | null;
+export type TemplateValue = TemplatePrimitive | TemplateValue[] | { [key: string]: TemplateValue };
+
+export interface RouteResponseSpec {
+  kind: "text" | "html" | "json";
+  body: TemplateValue;
+  status?: number;
+  headers?: Record<string, string>;
+}
+
+export interface BuiltinCorsConfig {
+  origin: string | null;
+  methods: string;
+  allowedHeaders: string | null;
+  exposedHeaders: string | null;
+  credentials: boolean;
+  maxAge: number | null;
+  optionsSuccessStatus: number;
+}
+
+export interface BuiltinSecurityHeadersConfig {
+  contentSecurityPolicy: string | null;
+  crossOriginOpenerPolicy: string | null;
+  crossOriginResourcePolicy: string | null;
+  referrerPolicy: string | null;
+  frameOptions: string | null;
+  noSniff: boolean;
+}
+
+export type BuiltinMiddlewareMetadata =
+  | { kind: "cors"; config: BuiltinCorsConfig }
+  | { kind: "securityHeaders"; config: BuiltinSecurityHeadersConfig };
 
 export type BodyValidator<T = unknown> = (data: unknown) => T | null | undefined;
 
@@ -34,20 +69,12 @@ export interface OutgoingResponse {
   end(data?: string | unknown): this;
 }
 
-export type Handler = (
-  req: IncomingRequest,
-  res: OutgoingResponse
-) => void | OutgoingResponse | Promise<void | OutgoingResponse | undefined>;
-
-export type Middleware = (
-  req: IncomingRequest,
-  res: OutgoingResponse,
-  next: () => void | Promise<void>
-) => void | OutgoingResponse | Promise<void | OutgoingResponse | undefined>;
-
 export interface RouteOptions {
-  middlewares?: Middleware[];
+  status?: number;
+  headers?: Record<string, string>;
 }
+
+export type BuiltinFeature = BuiltinMiddlewareMetadata;
 
 export interface AppOptions {
   keyFileName?: string;
@@ -55,5 +82,7 @@ export interface AppOptions {
   passphrase?: string;
   port?: number;
   host?: string;
+  runtime?: RuntimeMode;
+  httpVersion?: HttpVersion;
   rustCoreBinary?: string;
 }

@@ -4,20 +4,26 @@ export { Response } from "./response.js";
 export { startRustCoreServer } from "./rust-core.js";
 export { cors, securityHeaders } from "./dependencies/index.js";
 export type {
+  RuntimeMode,
+  HttpVersion,
+  BuiltinCorsConfig,
+  BuiltinSecurityHeadersConfig,
+  BuiltinFeature,
   HttpMethod,
   QueryParams,
   Headers,
   IncomingRequest,
   OutgoingResponse,
-  Handler,
-  Middleware,
   RouteOptions,
+  RouteResponseSpec,
   AppOptions,
+  TemplateValue,
   JsonBody,
 } from "./types.js";
 export type {
   RustCoreManifest,
   RustCoreServerHandle,
+  RustCorsManifest,
   RustStaticRoute,
   StartRustCoreServerOptions,
 } from "./rust-core.js";
