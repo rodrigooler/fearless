@@ -1,5 +1,5 @@
 import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { constants } from "node:fs";
+import { constants, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawn, type ChildProcess, execFile } from "node:child_process";
@@ -8,7 +8,10 @@ import net from "node:net";
 import { fileURLToPath } from "node:url";
 
 const execFileAsync = promisify(execFile);
-const projectRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const projectRoot = existsSync(join(__dirname, "..", "rust-core", "Cargo.toml"))
+  ? join(__dirname, "..")
+  : join(__dirname, "..", "..");
 const cargoManifest = join(projectRoot, "rust-core", "Cargo.toml");
 const rustBinaryName = process.platform === "win32" ? "fearless-core.exe" : "fearless-core";
 const rustBinaryPath = join(projectRoot, "rust-core", "target", "release", rustBinaryName);

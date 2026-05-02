@@ -393,6 +393,9 @@ export class App {
   private rustServer: RustCoreServerHandle | null = null;
   private bunServer: BunServerLike | null = null;
   private nodeServer: HttpServer | Http2SecureServer | null = null;
+  private builtinHeadersCache: Record<string, string> | null = null;
+  private bunNotFoundResponse: globalThis.Response | null = null;
+  private bunOptionsResponse: globalThis.Response | null = null;
   private config: Required<AppOptions> = {
     keyFileName: "",
     certFileName: "",
@@ -617,36 +620,25 @@ export class App {
   }
 
   private buildBuiltinHeaders(): Record<string, string> {
-    // Avoid spread operator - build headers directly
+    if (this.builtinHeadersCache !== null) {
+      return this.builtinHeadersCache;
+    }
+
     const builtinHeaders = this.builtin.headers;
     const hasBuiltinHeaders = Object.keys(builtinHeaders).length > 0;
     const hasCors = this.builtin.cors !== null;
 
-    // Fast path: no headers needed
     if (!hasBuiltinHeaders && !hasCors) {
-      return {};
-    }
-
-    // Calculate required size
-    let size = Object.keys(builtinHeaders).length;
-    const cors = this.builtin.cors;
-    if (cors) {
-      size += 1; // methods
-      if (cors.origin) size++;
-      if (cors.allowedHeaders) size++;
-      if (cors.exposedHeaders) size++;
-      if (cors.credentials) size++;
-      if (cors.maxAge !== null) size++;
+      this.builtinHeadersCache = {};
+      return this.builtinHeadersCache;
     }
 
     const headers: Record<string, string> = {};
-
-    // Copy builtin headers
     for (const key of Object.keys(builtinHeaders)) {
       headers[key] = builtinHeaders[key];
     }
 
-    // Add CORS headers
+    const cors = this.builtin.cors;
     if (cors) {
       if (cors.origin) {
         headers["Access-Control-Allow-Origin"] = cors.origin;
@@ -666,6 +658,7 @@ export class App {
       }
     }
 
+    this.builtinHeadersCache = headers;
     return headers;
   }
 
@@ -764,17 +757,23 @@ export class App {
   }
 
   private createBunNotFoundResponse(): globalThis.Response {
-    return new globalThis.Response("Not Found", {
-      status: 404,
-      headers: this.buildBuiltinHeaders(),
-    });
+    if (this.bunNotFoundResponse === null) {
+      this.bunNotFoundResponse = new globalThis.Response("Not Found", {
+        status: 404,
+        headers: this.buildBuiltinHeaders(),
+      });
+    }
+    return this.bunNotFoundResponse;
   }
 
   private createBunOptionsResponse(): globalThis.Response {
-    return new globalThis.Response("", {
-      status: this.builtin.cors?.optionsSuccessStatus ?? 204,
-      headers: this.buildBuiltinHeaders(),
-    });
+    if (this.bunOptionsResponse === null) {
+      this.bunOptionsResponse = new globalThis.Response("", {
+        status: this.builtin.cors?.optionsSuccessStatus ?? 204,
+        headers: this.buildBuiltinHeaders(),
+      });
+    }
+    return this.bunOptionsResponse;
   }
 
   private handleBunFallback(request: BunRuntimeRequest, server: BunServerLike): globalThis.Response {
@@ -878,7 +877,7 @@ export class App {
 
     if (this.builtin.cors && method === "OPTIONS") {
       const response = new Response(nodeRes);
-      this.applyBuiltins(response, this.builtin);
+      this.applyBuiltins(response);
       response.status(this.builtin.cors.optionsSuccessStatus).end();
       return;
     }
@@ -888,41 +887,19 @@ export class App {
     const response = new Response(nodeRes, routeMatch?.suppressBody ?? false);
 
     if (routeMatch) {
-      this.applyBuiltins(response, this.builtin);
+      this.applyBuiltins(response);
       this.writeRouteResponse(request, response, routeMatch);
       return;
     }
 
-    this.applyBuiltins(response, this.builtin);
+    this.applyBuiltins(response);
     response.status(404).end("Not Found");
   }
 
-  private applyBuiltins(response: Response, builtins: BuiltinState): void {
-    for (const [key, value] of Object.entries(builtins.headers)) {
-      response.setHeader(key, value);
-    }
-
-    if (!builtins.cors) {
-      return;
-    }
-
-    const cors = builtins.cors;
-    if (cors.origin) {
-      response.setHeader("Access-Control-Allow-Origin", cors.origin);
-    }
-
-    response.setHeader("Access-Control-Allow-Methods", cors.methods);
-    if (cors.allowedHeaders) {
-      response.setHeader("Access-Control-Allow-Headers", cors.allowedHeaders);
-    }
-    if (cors.exposedHeaders) {
-      response.setHeader("Access-Control-Expose-Headers", cors.exposedHeaders);
-    }
-    if (cors.credentials) {
-      response.setHeader("Access-Control-Allow-Credentials", "true");
-    }
-    if (cors.maxAge !== null) {
-      response.setHeader("Access-Control-Max-Age", String(cors.maxAge));
+  private applyBuiltins(response: Response): void {
+    const headers = this.buildBuiltinHeaders();
+    for (const key of Object.keys(headers)) {
+      response.setHeader(key, headers[key]);
     }
   }
 
@@ -1023,6 +1000,10 @@ export class App {
   }
 
   use(feature: BuiltinFeature): this {
+    this.builtinHeadersCache = null;
+    this.bunNotFoundResponse = null;
+    this.bunOptionsResponse = null;
+
     switch (feature.kind) {
       case "cors":
         this.builtin.cors = feature.config;
