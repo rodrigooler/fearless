@@ -27,6 +27,7 @@
   },
   "optimizations": {
     "rust": [
+      "Optional io-uring backend on Linux (feature = io-uring)",
       "SO_REUSEPORT with per-worker listeners (kernel-level load balancing)",
       "BufReader with 32KB buffers (reduced syscalls)",
       "Date cache shared across threads (no per-request formatting)",

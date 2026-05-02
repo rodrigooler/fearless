@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY ./rust-core ./rust-core
 
-RUN cargo build --release --manifest-path rust-core/Cargo.toml
+RUN cargo build --release --features io-uring --manifest-path rust-core/Cargo.toml
 
 FROM debian:bookworm-slim
 

@@ -280,22 +280,129 @@ pub fn load_manifest(path: impl AsRef<Path>) -> io::Result<Manifest> {
     Ok(manifest)
 }
 
-pub fn run_benchmark_server(port: u16) -> io::Result<()> {
-    let worker_count = env::var("FEARLESS_WORKERS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|count| *count > 0)
-        .unwrap_or(32);
-    let listeners = build_reuse_port_listeners(port, worker_count)?;
-    let table = Arc::new(BenchmarkRouteTable::new());
+#[cfg(all(target_os = "linux", feature = "io-uring"))]
+mod io_uring_impl {
+    use super::*;
+    use std::os::fd::FromRawFd;
 
-    for listener in listeners {
-        let table = Arc::clone(&table);
-        thread::spawn(move || benchmark_worker_loop(listener, table));
+    pub fn run(port: u16) -> io::Result<()> {
+        let worker_count = env::var("FEARLESS_WORKERS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|count| *count > 0)
+            .unwrap_or(32);
+        let table = Arc::new(BenchmarkRouteTable::new());
+
+        tokio_uring::start(async {
+            let mut handles = Vec::with_capacity(worker_count);
+            for _ in 0..worker_count {
+                let listener = build_io_uring_listener(port)?;
+                let table = Arc::clone(&table);
+                handles.push(tokio_uring::spawn(io_uring_worker_loop(listener, table)));
+            }
+            for handle in handles {
+                let _ = handle.await;
+            }
+            Ok(())
+        })
     }
 
-    loop {
-        thread::park();
+    fn build_io_uring_listener(port: u16) -> io::Result<tokio_uring::net::TcpListener> {
+        let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
+        socket.set_reuse_address(true)?;
+        set_socket_reuse_port(&socket)?;
+        socket.set_nodelay(true)?;
+        socket.set_recv_buffer_size(1024 * 1024)?;
+        socket.set_send_buffer_size(1024 * 1024)?;
+        socket.bind(&socket2::SockAddr::from(std::net::SocketAddr::from(([0, 0, 0, 0], port))))?;
+        socket.listen(8192)?;
+
+        let std_listener: TcpListener = socket.into();
+        let fd = std_listener.as_raw_fd();
+        std::mem::forget(std_listener);
+        let uring_listener = unsafe { tokio_uring::net::TcpListener::from_raw_fd(fd) };
+        Ok(uring_listener)
+    }
+
+    async fn io_uring_worker_loop(
+        listener: tokio_uring::net::TcpListener,
+        table: Arc<BenchmarkRouteTable>,
+    ) {
+        loop {
+            let (stream, _) = match listener.accept().await {
+                Ok(val) => val,
+                Err(_) => continue,
+            };
+            let table = Arc::clone(&table);
+            tokio_uring::spawn(handle_io_uring_conn(stream, table));
+        }
+    }
+
+    async fn handle_io_uring_conn(
+        stream: tokio_uring::net::TcpStream,
+        table: Arc<BenchmarkRouteTable>,
+    ) {
+        let mut buf = Vec::with_capacity(4096);
+        let mut cache = BenchmarkCachedResponses::new();
+        loop {
+            buf.clear();
+            // Read until we find \r\n\r\n (end of headers)
+            let mut header_end = false;
+            while !header_end {
+                let slice = vec![0u8; 1024];
+                let (result, slice_read) = stream.read(slice).await;
+                match result {
+                    Ok(0) => return,
+                    Ok(n) => {
+                        buf.extend_from_slice(&slice_read[..n]);
+                        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                            header_end = true;
+                        }
+                    }
+                    Err(_) => return,
+                }
+            }
+
+            // Fast parse: look at first line only
+            let close = buf.len() >= 8 && buf[buf.len() - 8..].starts_with(b"HTTP/1.0");
+            let (route, _) = parse_benchmark_request_line(&buf);
+
+            let second = table.date_cache.current_second();
+            cache.refresh(second, &table);
+            let response = cache.response(route, close);
+
+            let (result, _) = stream.write_all(response.to_vec()).await;
+            if result.is_err() || close {
+                return;
+            }
+        }
+    }
+}
+
+pub fn run_benchmark_server(port: u16) -> io::Result<()> {
+    #[cfg(all(target_os = "linux", feature = "io-uring"))]
+    {
+        return io_uring_impl::run(port);
+    }
+
+    #[cfg(not(all(target_os = "linux", feature = "io-uring")))]
+    {
+        let worker_count = env::var("FEARLESS_WORKERS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|count| *count > 0)
+            .unwrap_or(32);
+        let listeners = build_reuse_port_listeners(port, worker_count)?;
+        let table = Arc::new(BenchmarkRouteTable::new());
+
+        for listener in listeners {
+            let table = Arc::clone(&table);
+            thread::spawn(move || benchmark_worker_loop(listener, table));
+        }
+
+        loop {
+            thread::park();
+        }
     }
 }
 

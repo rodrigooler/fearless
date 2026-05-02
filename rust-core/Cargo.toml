@@ -3,6 +3,10 @@ name = "fearless-core"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+io-uring = ["dep:tokio-uring"]
+
 [dependencies]
 httpdate = "1"
 libc = "0.2"
@@ -13,8 +17,8 @@ serde_json = "1"
 socket2 = "0.5"
 smallvec = "1"
 
-[target.'cfg(all(feature = "tokio-uring", linux))'.dependencies]
-tokio-uring = { version = "0.5", features = ["bytes"] }
+[target.'cfg(target_os = "linux")'.dependencies]
+tokio-uring = { version = "0.5", features = ["bytes"], optional = true }
 
 [profile.release]
 lto = "fat"
