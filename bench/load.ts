@@ -50,9 +50,9 @@ async function runLoadTest(name: string, url: string): Promise<void> {
   console.log(`${name}: ${result.latency.average.toFixed(2)} ms average latency`);
 }
 
-async function main(): Promise<void> {
-  const port = 3001;
-  const app = new App({ port, host: "127.0.0.1", runtime: "auto" });
+async function benchmarkRuntime(name: string, runtime: "auto" | "rust"): Promise<void> {
+  const port = runtime === "auto" ? 3001 : 3002;
+  const app = new App({ port, host: "127.0.0.1", runtime });
 
   app.text("/plaintext", "Hello, World!");
   app.json("/json", { message: "Hello, World!" });
@@ -61,11 +61,17 @@ async function main(): Promise<void> {
 
   try {
     await waitForTcp(port);
+    console.log(`\n--- ${name} ---`);
     await runLoadTest("plaintext", `http://127.0.0.1:${port}/plaintext`);
     await runLoadTest("json", `http://127.0.0.1:${port}/json`);
   } finally {
     await app.close();
   }
+}
+
+async function main(): Promise<void> {
+  await benchmarkRuntime("Bun/Node (auto)", "auto");
+  await benchmarkRuntime("Rust Core", "rust");
 }
 
 void main().catch((error) => {

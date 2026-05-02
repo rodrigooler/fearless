@@ -4,8 +4,8 @@
     "path": "../FrameworkBenchmarks"
   },
   "latestRun": {
-    "timestamp": "2026-05-02T02:49:51-03:00",
-    "resultsFile": "../FrameworkBenchmarks/results/20260502024951/results.json",
+    "timestamp": "2026-05-02T05:55:58-03:00",
+    "resultsFile": "../FrameworkBenchmarks/results/20260502055558/results.json",
     "testDir": "TypeScript/fearless",
     "tests": [
       "plaintext",
@@ -14,20 +14,25 @@
     "durationSec": 10,
     "summary": {
       "plaintext": {
-        "bestRequestsPerSec": 1709622,
-        "bestConcurrency": 1024,
-        "bestLatencyAvgMs": 0.088
+        "bestRequestsPerSec": 2802164,
+        "bestConcurrency": 256,
+        "bestLatencyAvgMs": 0.187
       },
       "json": {
-        "bestRequestsPerSec": 1362890,
+        "bestRequestsPerSec": 1298670,
         "bestConcurrency": 16,
-        "bestLatencyAvgMs": 0.179
+        "bestLatencyAvgMs": 0.027
       }
     }
   },
   "optimizations": {
     "rust": [
-      "Pre-allocated buffers (256b request_line, 128b headers)",
+      "SO_REUSEPORT with per-worker listeners (kernel-level load balancing)",
+      "BufReader with 32KB buffers (reduced syscalls)",
+      "Date cache shared across threads (no per-request formatting)",
+      "Eliminated ConnectionReader custom slow path (replaced with BufReader)",
+      "Unified fast-path static route lookup skipping header parsing",
+      "Workers default = available_parallelism * 2 (no low clamp)",
       "#[inline] on 15+ hot path functions",
       "Fast path parsing for well-formed requests",
       "Unrolled ascii_eq_ignore_case for common lengths",
@@ -35,6 +40,9 @@
       "Cached Arc references in route matching"
     ],
     "typescript": [
+      "Cached builtin headers (computed once, reused per request)",
+      "Cached Bun fallback responses (404/OPTIONS)",
+      "Fixed rust-core path resolution for dist builds",
       "Content-Type lookup table (O(1))",
       "Pre-allocated empty contexts",
       "Template regex cached once",
