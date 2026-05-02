@@ -12,7 +12,7 @@ EXPOSE 8080
 
 WORKDIR /app
 
-ENV FEARLESS_WORKERS=16
+ENV FEARLESS_WORKERS=32
 
 COPY --from=build /app/rust-core/target/release/fearless-core /app/fearless-core
 

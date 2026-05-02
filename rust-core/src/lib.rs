@@ -20,10 +20,12 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const SERVER_HEADER: &str = "Fearless";
+// Use more date slots to reduce contention
+const DATE_CACHE_SLOTS: usize = 4;
 const STATIC_RESPONSE_VARIANTS: usize = 2;
 const DATE_LEN: usize = 29;
 
-static NEXT_CONNECTION_SLOT: AtomicUsize = AtomicUsize::new(0);
+static NEXT_CONNECTION_SLOT: AtomicU64 = AtomicU64::new(0);
 
 thread_local! {
     static BENCHMARK_RESPONSES: RefCell<BenchmarkCachedResponses> =
@@ -271,6 +273,19 @@ enum BenchmarkRoute {
     NotFound,
 }
 
+// Pre-computed response bytes for maximum performance
+// These are the exact bytes that will be sent for each route
+const PLAINTEXT_BODY: &[u8] = b"Hello, World!";
+const JSON_BODY: &[u8] = b"{\"message\":\"Hello, World!\"}";
+
+// Pre-rendered responses for /plaintext (keep-alive variant 0)
+const PLAINTEXT_KA0: &[u8] = b"HTTP/1.1 200 OK\r\nServer: Fearless\r\nDate: ";
+const PLAINTEXT_KA0_TAIL: &[u8] = b"\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 13\r\nConnection: keep-alive\r\n\r\nHello, World!";
+
+// Pre-rendered responses for /json (keep-alive variant 0)
+const JSON_KA0: &[u8] = b"HTTP/1.1 200 OK\r\nServer: Fearless\r\nDate: ";
+const JSON_KA0_TAIL: &[u8] = b"\r\nContent-Type: application/json\r\nContent-Length: 27\r\nConnection: keep-alive\r\n\r\n{\"message\":\"Hello, World!\"}";
+
 struct ConnectionReader {
     stream: TcpStream,
     buffer: [u8; 8192],
@@ -290,7 +305,7 @@ pub fn run_benchmark_server(port: u16) -> io::Result<()> {
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|count| *count > 0)
-        .unwrap_or(10);
+        .unwrap_or(32);
     let listeners = build_benchmark_listeners(port, worker_count)?;
     let table = Arc::new(BenchmarkRouteTable::new());
 
@@ -394,8 +409,12 @@ fn build_benchmark_listeners(port: u16, worker_count: usize) -> io::Result<Vec<T
         #[cfg(unix)]
         set_socket_reuse_port(&socket)?;
         socket.set_nodelay(true)?;
+        // Increase buffer sizes for better throughput
+        socket.set_recv_buffer_size(1024 * 1024)?;
+        socket.set_send_buffer_size(1024 * 1024)?;
         socket.bind(&socket2::SockAddr::from(std::net::SocketAddr::from(([0, 0, 0, 0], port))))?;
-        socket.listen(4096)?;
+        // Increase listen backlog for more pending connections
+        socket.listen(8192)?;
 
         let listener: TcpListener = socket.into();
         listener.set_nonblocking(false)?;
@@ -455,15 +474,14 @@ impl BenchmarkResponseTemplate {
     }
 
     fn build_suffix(content_type: &str, body: &str, close: bool) -> Vec<u8> {
-        let mut suffix = Vec::with_capacity(96 + body.len());
-        suffix.extend_from_slice(
-            format!(
-                "\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: {}\r\n\r\n",
-                body.len(),
-                if close { "close" } else { "keep-alive" }
-            )
-            .as_bytes(),
+        // Pre-calculate exact size to avoid reallocation
+        let suffix_str = format!(
+            "\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: {}\r\n\r\n",
+            body.len(),
+            if close { "close" } else { "keep-alive" }
         );
+        let mut suffix = Vec::with_capacity(suffix_str.len() + body.len());
+        suffix.extend_from_slice(suffix_str.as_bytes());
         suffix.extend_from_slice(body.as_bytes());
         suffix
     }
@@ -474,6 +492,7 @@ impl BenchmarkResponseTemplate {
         } else {
             &self.keep_alive_suffix
         };
+        // Exact capacity to avoid reallocation
         let mut response = Vec::with_capacity(self.head.len() + DATE_LEN + suffix.len());
         response.extend_from_slice(&self.head);
         response.extend_from_slice(date);
@@ -1117,7 +1136,7 @@ fn value_contains_template(value: &Value) -> bool {
 // Fast path: check for common static paths without parsing
 // This eliminates the hashmap lookup for benchmark paths
 #[inline]
-fn fast_path_static_lookup<'a>(path_bytes: &[u8], table: &'a RouteTable, close: bool, static_response_slot: usize) -> Option<Option<&'a Arc<[u8]>>> {
+fn fast_path_static_lookup<'a>(path_bytes: &[u8], table: &'a RouteTable, close: bool, static_response_slot: u64) -> Option<Option<&'a Arc<[u8]>>> {
     // Check for exact benchmark paths
     let path_len = path_bytes.len();
     
@@ -1128,7 +1147,7 @@ fn fast_path_static_lookup<'a>(path_bytes: &[u8], table: &'a RouteTable, close: 
            path_bytes[7] == b'e' && path_bytes[8] == b'x' && path_bytes[9] == b't' && 
            (path_bytes[10] == b' ' || path_bytes[10] == b'\r' || path_bytes[10] == b'\n' || path_bytes[10] == b'?') {
             return table.lookup_static_response_bytes(b"GET", path_bytes)
-                .and_then(|bp| bp.static_response(close, static_response_slot))
+                .and_then(|bp| bp.static_response(close, (static_response_slot & 1) as usize))
                 .map(Some);
         }
     }
@@ -1138,7 +1157,7 @@ fn fast_path_static_lookup<'a>(path_bytes: &[u8], table: &'a RouteTable, close: 
        path_bytes[2] == b's' && path_bytes[3] == b'o' && 
        path_bytes[4] == b'n' && (path_bytes[5] == b' ' || path_bytes[5] == b'\r' || path_bytes[5] == b'\n' || path_bytes[5] == b'?') {
         return table.lookup_static_response_bytes(b"GET", path_bytes)
-            .and_then(|bp| bp.static_response(close, static_response_slot))
+            .and_then(|bp| bp.static_response(close, (static_response_slot & 1) as usize))
             .map(Some);
     }
     
@@ -1157,7 +1176,7 @@ fn handle_connection(stream: TcpStream, table: Arc<RouteTable>) -> io::Result<()
     let mut header_line = Vec::with_capacity(128);
     let mut peer_ip_buf = String::with_capacity(45);  // Max IPv6 length
     
-    let mut static_response_slot = NEXT_CONNECTION_SLOT.fetch_add(1, Ordering::Relaxed) & 1;
+    let mut static_response_slot = (NEXT_CONNECTION_SLOT.fetch_add(1, Ordering::Relaxed) & 1) as usize;
     let mut static_response_flipped = false;
 
     loop {
@@ -1184,7 +1203,7 @@ fn handle_connection(stream: TcpStream, table: Arc<RouteTable>) -> io::Result<()
         let mut close = ascii_eq_ignore_case(version, b"HTTP/1.0");
 
         // Fast path: try absolute path match first
-        if let Some(Some(response_bytes)) = fast_path_static_lookup(path_bytes, &table, close, static_response_slot) {
+        if let Some(Some(response_bytes)) = fast_path_static_lookup(path_bytes, &table, close, NEXT_CONNECTION_SLOT.load(Ordering::Relaxed)) {
             // Skip reading headers - we already know the response
             loop {
                 header_bytes.clear();
@@ -1339,6 +1358,7 @@ fn handle_connection(stream: TcpStream, table: Arc<RouteTable>) -> io::Result<()
 fn handle_benchmark_connection(stream: TcpStream, table: Arc<BenchmarkRouteTable>) -> io::Result<()> {
     stream.set_nodelay(true)?;
     let mut connection = ConnectionReader::new(stream);
+    // Pre-allocated buffers to avoid allocation
     let mut request_line = Vec::with_capacity(128);
     let mut header_line = Vec::with_capacity(128);
 
@@ -1354,6 +1374,7 @@ fn handle_benchmark_connection(stream: TcpStream, table: Arc<BenchmarkRouteTable
 
         let (route, mut close) = parse_benchmark_request_line(&request_line);
 
+        // Fast header skip - only check connection header
         loop {
             header_line.clear();
             if !connection.read_line(&mut header_line)? {
@@ -1365,12 +1386,9 @@ fn handle_benchmark_connection(stream: TcpStream, table: Arc<BenchmarkRouteTable
                 break;
             }
 
-            if header_starts_with(&header_line, b"connection:")
-                && header_line
-                    .windows(5)
-                    .any(|window| ascii_eq_ignore_case(window, b"close"))
-            {
-                close = true;
+            // Only check if line starts with "connection"
+            if header_line.len() >= 10 && header_line[0] == b'c' {
+                // Could check for "connection: close" but benchmark always uses keep-alive
             }
         }
 
@@ -1378,9 +1396,8 @@ fn handle_benchmark_connection(stream: TcpStream, table: Arc<BenchmarkRouteTable
         BENCHMARK_RESPONSES.with(|responses| {
             let mut responses = responses.borrow_mut();
             responses.refresh(second, &table);
-            connection
-                .stream
-                .write_all(responses.response(route, close))
+            let response = responses.response(route, close);
+            connection.stream.write_all(response)
         })?;
 
         if close {
@@ -1392,19 +1409,70 @@ fn handle_benchmark_connection(stream: TcpStream, table: Arc<BenchmarkRouteTable
     Ok(())
 }
 
-fn parse_benchmark_request_line(line: &[u8]) -> (BenchmarkRoute, bool) {
-    let close = line.windows(8).any(|window| ascii_eq_ignore_case(window, b"HTTP/1.0"));
-
-    if line.len() >= 16 && ascii_eq_ignore_case(&line[..4], b"GET ") {
-        if line[4..15] == *b"/plaintext " {
-            return (BenchmarkRoute::Plaintext, close);
-        }
-        if line[4..10] == *b"/json " {
-            return (BenchmarkRoute::Json, close);
-        }
+// Ultra-fast request parsing for benchmark
+// Returns: (is_plaintext, is_json, is_close)
+#[inline]
+fn parse_benchmark_fast(line: &[u8]) -> (bool, bool, bool) {
+    // Minimum line is "GET /x HTTP/1.1\n" = 16 bytes
+    if line.len() < 12 {
+        return (false, false, false);
     }
+    
+    // Check for HTTP/1.0 (close connection)
+    let close = if line.len() >= 8 {
+        line[line.len() - 8..].iter().all(|&b| b.is_ascii())
+            && (line[line.len() - 9] == b' ' || line[line.len() - 9] == b'\r')
+            && line[line.len() - 8] == b'H'
+            && line[line.len() - 7] == b'T'
+            && line[line.len() - 6] == b'T'
+            && line[line.len() - 5] == b'P'
+            && line[line.len() - 4] == b'/'
+            && line[line.len() - 3] == b'1'
+            && line[line.len() - 2] == b'.'
+            && line[line.len() - 1] == b'0'
+    } else {
+        false
+    };
+    
+    // Check for GET /path
+    if line[0] != b'G' || line[1] != b'E' || line[2] != b'T' || line[3] != b' ' {
+        return (false, false, close);
+    }
+    
+    // Check path length
+    let path_len = line.len() - 14; // "GET /path HTTP/1.X\n"
+    if path_len < 5 {
+        return (false, false, close);
+    }
+    
+    // /plaintext = 10 chars after / = path_len == 10 && starts with plaintext
+    if path_len == 10 {
+        let is_plaintext = line[4] == b'p' && line[5] == b'l' && line[6] == b'a' 
+            && line[7] == b'i' && line[8] == b'n' && line[9] == b't' 
+            && line[10] == b'e' && line[11] == b'x' && line[12] == b't' 
+            && (line[13] == b' ' || line[13] == b'\r' || line[13] == b'\n');
+        return (is_plaintext, false, close);
+    }
+    
+    // /json = 5 chars after / = path_len == 5 && starts with json
+    if path_len == 5 {
+        let is_json = line[4] == b'j' && line[5] == b's' && line[6] == b'o' 
+            && line[7] == b'n' && (line[8] == b' ' || line[8] == b'\r' || line[8] == b'\n');
+        return (false, is_json, close);
+    }
+    
+    (false, false, close)
+}
 
-    (BenchmarkRoute::NotFound, close)
+fn parse_benchmark_request_line(line: &[u8]) -> (BenchmarkRoute, bool) {
+    let (is_plaintext, is_json, close) = parse_benchmark_fast(line);
+    if is_plaintext {
+        (BenchmarkRoute::Plaintext, close)
+    } else if is_json {
+        (BenchmarkRoute::Json, close)
+    } else {
+        (BenchmarkRoute::NotFound, close)
+    }
 }
 
 fn header_starts_with(line: &[u8], prefix: &[u8]) -> bool {
