@@ -49,7 +49,7 @@ pub async fn handle_db_random(pool: &Pool) -> Vec<u8> {
     let mut resp = Vec::with_capacity(HTTP_PREFIX.len() + 16 + body.len());
     resp.extend_from_slice(HTTP_PREFIX);
     write_usize(&mut resp, body.len());
-    resp.extend_from_slice(b"\r\nConnection: close\r\n\r\n");
+    resp.extend_from_slice(b"\r\n\r\n");
     resp.extend_from_slice(&body);
     resp
 }

@@ -27,6 +27,10 @@ pub struct Connection {
     /// Reused scratch buffer for AOT handler output. Cleared per-call,
     /// never freed across requests on this connection.
     aot_scratch: Vec<u8>,
+    /// Close decision (HTTP/1.0 vs HTTP/1.1) captured at park time so the
+    /// async response delivery can honor keep-alive instead of forcing close.
+    #[cfg(feature = "pg-handles")]
+    parked_close_after: bool,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -52,6 +56,8 @@ impl Connection {
             state: State::Reading,
             close_after_drain: false,
             aot_scratch: Vec::with_capacity(AOT_SCRATCH_CAPACITY),
+            #[cfg(feature = "pg-handles")]
+            parked_close_after: false,
         }
     }
 
@@ -224,7 +230,7 @@ impl Connection {
                             bridge.spawn(slot_id, async move {
                                 crate::aot::db_handler::handle_db_random(&pool_for_task).await
                             });
-                            self.park_for_async();
+                            self.park_for_async(cls.close);
                             parked_async = true;
                             break;
                         }
@@ -419,8 +425,9 @@ impl Connection {
     /// While parked, no I/O is submitted; the loop wakes us via the eventfd
     /// CQE and calls `deliver_async_response`.
     #[allow(dead_code)] // wired up in Task 7
-    pub(crate) fn park_for_async(&mut self) {
+    pub(crate) fn park_for_async(&mut self, close_after: bool) {
         self.state = State::AwaitingAsync;
+        self.parked_close_after = close_after;
     }
 
     /// Called from the io_uring loop when the eventfd CQE delivers an async
@@ -453,10 +460,10 @@ impl Connection {
         write_slice[..bytes.len()].copy_from_slice(bytes);
         self.write_filled = bytes.len();
         self.write_offset = 0;
-        // MVP: close after the async response drains. Keep-alive across
-        // async boundaries needs more bookkeeping (request body buffering,
-        // pipelined-request handling under park) — punted to Phase 1.2.
-        self.close_after_drain = true;
+        // Honor the close decision captured at park time: HTTP/1.1 keep-alive
+        // requests transition back to Reading after the Send drains; HTTP/1.0
+        // (or explicit Connection: close) still tear down the socket.
+        self.close_after_drain = self.parked_close_after;
         self.state = State::Writing;
         self.submit_write(ring, token)?;
         Ok(true)
