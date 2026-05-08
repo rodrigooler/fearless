@@ -7,10 +7,10 @@ This file is a project map for new contributors (humans or AI agents) coming int
 ## What you should read first, in order
 
 1. [`README.md`](./README.md) — public-facing overview, public API, performance honesty.
-2. [`ARCHITECTURE.md`](./ARCHITECTURE.md) — the Rust/TypeScript split, what runs where, future direction.
+2. [`ARCHITECTURE.md`](./ARCHITECTURE.md) — the Rust/TypeScript split, what runs where.
 3. [`AGENTS.md`](./AGENTS.md) — coding rules and hot-path discipline. **Mandatory read before editing source.**
-4. [`docs/superpowers/plans/2026-05-08-aot-strategy.md`](./docs/superpowers/plans/2026-05-08-aot-strategy.md) — the multi-quarter AOT strategy. Explains why the architecture is hybrid Rust+Bun and where it goes.
-5. [`docs/superpowers/plans/2026-05-08-perf-roadmap-tiers.md`](./docs/superpowers/plans/2026-05-08-perf-roadmap-tiers.md) — three tiers of perf work still on the table for the existing Rust core.
+4. [`CONTRIBUTING.md`](./CONTRIBUTING.md) — contribution flow.
+5. [`examples/README.md`](./examples/README.md) — runnable patterns showing how the API is meant to be used.
 
 ## Repo layout
 
@@ -67,7 +67,6 @@ fearless/
 │   ├── micro.ts            Per-route micro-benches
 │   └── techempower/        TFB harness inputs (dockerfiles, manifest)
 │
-├── docs/superpowers/plans/ Strategy + roadmap docs (multiple, dated)
 ├── benchmark.json          Latest bench results + optimization changelog
 ├── package.json            npm config (name: "microu" — legacy)
 ├── .oxlintrc.json          Optional oxlint config aligned with AOT-friendly patterns
@@ -87,7 +86,7 @@ A Fearless app runs as **two coordinated processes**:
 1. **rust-core (binary).** Owns port 8080. Serves declarative template routes (`app.text`, `app.json`, `app.html`) at multi-million RPS. Handles connection lifecycle, HTTP parsing, pipelining.
 2. **Node or Bun (TS).** Owns the rest — function handlers, hooks, JS-side application logic.
 
-When the app has no function handlers, the Rust core can serve everything alone. When the app has function handlers, the dispatcher today routes those to Node/Bun. The [AOT strategy](./docs/superpowers/plans/2026-05-08-aot-strategy.md) describes how function handlers will progressively compile to Rust at build time.
+When the app has no function handlers, the Rust core can serve everything alone. When the app has function handlers, the dispatcher routes those to Node/Bun.
 
 ### Routing model
 
@@ -166,15 +165,8 @@ The full rule set lives in [`AGENTS.md`](./AGENTS.md). A non-exhaustive condensa
 - Rust changes that touch the request hot path require a benchmark before/after.
 - Conventional commits with scopes: `feat(rust-core)`, `perf(rust-core)`, `fix(ts)`, `docs`, `test`, `chore`.
 
-## Where to record decisions
-
-- Implementation plans: `docs/superpowers/plans/YYYY-MM-DD-<topic>.md`
-- Local benchmark snapshots: append to `docs/superpowers/plans/2026-05-07-baselines.md` and update `benchmark.json`
-- Strategy / direction: a new doc under `docs/superpowers/plans/`, then link from this file's reading list
-
 ## When in doubt
 
 - Read [`AGENTS.md`](./AGENTS.md).
-- Read the relevant strategy doc under [`docs/superpowers/plans/`](./docs/superpowers/plans/).
 - Run the existing tests before changing anything (`npm test`, `cargo test`).
-- Prefer a small PR that lands cleanly over a big PR with regressions. Multi-step changes get split into commits per the discriminated step (see recent git history for examples — Phase 0/1/2/3/4 of the io_uring sprint each landed as multiple small commits).
+- Prefer a small PR that lands cleanly over a big PR with regressions. Multi-step changes get split into commits — read recent git history for examples.
