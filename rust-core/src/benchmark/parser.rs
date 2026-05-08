@@ -14,6 +14,7 @@ pub struct Classification {
 const PLAINTEXT: &[u8] = b"GET /plaintext HTTP/1.";
 const JSON: &[u8] = b"GET /json HTTP/1.";
 
+/// Classifies a single HTTP request line. The slice must include the trailing CRLF.
 #[inline]
 pub fn classify(line: &[u8]) -> Classification {
     if line.len() >= PLAINTEXT.len() + 3 && &line[..PLAINTEXT.len()] == PLAINTEXT {
@@ -27,7 +28,7 @@ pub fn classify(line: &[u8]) -> Classification {
     Classification { route: Route::NotFound, close: false }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct ParseResult {
     pub consumed: usize,
     pub count: usize,
