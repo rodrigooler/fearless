@@ -124,6 +124,11 @@ pub struct BenchmarkServer {
     /// don't match the benchmark fast path get a route lookup before falling
     /// back to 404. Populated by `with_aot_table`.
     pub aot_table: Option<Arc<crate::aot::AotRouteTable>>,
+    /// Optional Postgres connection pool. Built once at startup in
+    /// `run_with_aot` when `FEARLESS_SQL_PRIMARY` is set; shared across all
+    /// io_uring workers via this Arc. `None` means /db routes return 503.
+    #[cfg(feature = "pg-handles")]
+    pub pg_pool: Option<Arc<deadpool_postgres::Pool>>,
 }
 
 impl BenchmarkServer {
@@ -143,7 +148,13 @@ impl BenchmarkServer {
                 r.refresh(&c.snapshot());
             })
             .expect("spawn refresher");
-        Self { responses, clock, aot_table: None }
+        Self {
+            responses,
+            clock,
+            aot_table: None,
+            #[cfg(feature = "pg-handles")]
+            pg_pool: None,
+        }
     }
 
     /// Builder: attach an AOT route table. Call this once at startup before
@@ -151,6 +162,14 @@ impl BenchmarkServer {
     /// share the same lookup data.
     pub fn with_aot_table(mut self, table: Arc<crate::aot::AotRouteTable>) -> Self {
         self.aot_table = Some(table);
+        self
+    }
+
+    /// Builder: attach a Postgres pool. Call this once at startup before
+    /// spawning workers; the pool is shared across all workers via Arc.
+    #[cfg(feature = "pg-handles")]
+    pub fn with_pg_pool(mut self, pool: Arc<deadpool_postgres::Pool>) -> Self {
+        self.pg_pool = Some(pool);
         self
     }
 }

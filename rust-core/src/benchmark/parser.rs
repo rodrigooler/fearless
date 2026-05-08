@@ -3,6 +3,9 @@ pub enum Route {
     Plaintext,
     Json,
     NotFound,
+    /// Phase 1.1: hardcoded Postgres `/db` handler. Routed to the async bridge.
+    #[cfg(feature = "pg-handles")]
+    Db,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -17,6 +20,8 @@ pub struct Classification {
 
 const PLAINTEXT: &[u8] = b"GET /plaintext HTTP/1.";
 const JSON: &[u8] = b"GET /json HTTP/1.";
+#[cfg(feature = "pg-handles")]
+const DB: &[u8] = b"GET /db HTTP/1.";
 
 /// Classifies a single HTTP request line. The slice must include the trailing CRLF.
 /// `request_len` is set to 0 by this fn — the caller in `parse_pipeline` fills
@@ -30,6 +35,11 @@ pub fn classify(line: &[u8]) -> Classification {
     if line.len() >= JSON.len() + 3 && &line[..JSON.len()] == JSON {
         let close = line[JSON.len()] == b'0';
         return Classification { route: Route::Json, close, request_len: 0 };
+    }
+    #[cfg(feature = "pg-handles")]
+    if line.len() >= DB.len() + 3 && &line[..DB.len()] == DB {
+        let close = line[DB.len()] == b'0';
+        return Classification { route: Route::Db, close, request_len: 0 };
     }
     Classification { route: Route::NotFound, close: false, request_len: 0 }
 }

@@ -19,8 +19,22 @@ fn classifies_json_close() {
 }
 
 #[test]
+#[cfg(not(feature = "pg-handles"))]
 fn unknown_path_is_not_found() {
     let line = b"GET /db HTTP/1.1\r\n";
+    assert_eq!(classify(line).route, Route::NotFound);
+}
+
+#[test]
+#[cfg(feature = "pg-handles")]
+fn db_path_classified_under_pg_handles() {
+    let line = b"GET /db HTTP/1.1\r\n";
+    assert_eq!(classify(line).route, Route::Db);
+}
+
+#[test]
+fn truly_unknown_path_is_not_found() {
+    let line = b"GET /nope HTTP/1.1\r\n";
     assert_eq!(classify(line).route, Route::NotFound);
 }
 

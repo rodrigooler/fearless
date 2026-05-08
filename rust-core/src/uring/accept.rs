@@ -148,6 +148,9 @@ pub fn run_loop(
                 continue;
             }
 
+            #[cfg(feature = "pg-handles")]
+            let alive = entry.conn.handle_completion(ring, user_data, result, &bridge)?;
+            #[cfg(not(feature = "pg-handles"))]
             let alive = entry.conn.handle_completion(ring, user_data, result)?;
             if !alive {
                 let removed = conns.remove(index);

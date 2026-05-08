@@ -97,6 +97,7 @@ impl Connection {
         ring: &mut IoUring,
         token: u64,
         result: i32,
+        #[cfg(feature = "pg-handles")] bridge: &Arc<crate::runtime::async_bridge::WorkerBridge>,
     ) -> io::Result<bool> {
         match self.state {
             State::Reading => {
@@ -105,7 +106,14 @@ impl Connection {
                     return Ok(false);
                 }
                 self.read_filled += result as usize;
-                self.process_buffered(ring, token)
+                #[cfg(feature = "pg-handles")]
+                {
+                    self.process_buffered(ring, token, bridge)
+                }
+                #[cfg(not(feature = "pg-handles"))]
+                {
+                    self.process_buffered(ring, token)
+                }
             }
             State::Writing => {
                 if result <= 0 {
@@ -127,7 +135,14 @@ impl Connection {
                 self.state = State::Reading;
                 if self.read_filled > 0 {
                     // Process any leftover pipelined requests that didn't fit in the previous write batch.
-                    return self.process_buffered(ring, token);
+                    #[cfg(feature = "pg-handles")]
+                    {
+                        return self.process_buffered(ring, token, bridge);
+                    }
+                    #[cfg(not(feature = "pg-handles"))]
+                    {
+                        return self.process_buffered(ring, token);
+                    }
                 }
                 self.submit_read(ring, token)?;
                 Ok(true)
@@ -143,7 +158,12 @@ impl Connection {
         }
     }
 
-    fn process_buffered(&mut self, ring: &mut IoUring, token: u64) -> io::Result<bool> {
+    fn process_buffered(
+        &mut self,
+        ring: &mut IoUring,
+        token: u64,
+        #[cfg(feature = "pg-handles")] bridge: &Arc<crate::runtime::async_bridge::WorkerBridge>,
+    ) -> io::Result<bool> {
         let snap = self.server.responses.snapshot();
         let mut classifications =
             [Classification { route: Route::NotFound, close: false, request_len: 0 }; MAX_PIPELINE];
@@ -168,6 +188,10 @@ impl Connection {
         let mut classified_consumed: usize = 0;
         let mut bytes_consumed: usize = 0;
         let aot_table = self.server.aot_table.clone();
+        // When a /db (async) request fires we park; signal so the post-loop
+        // tail skips submit_write entirely (the eventfd CQE will deliver).
+        #[cfg(feature = "pg-handles")]
+        let mut parked_async = false;
 
         for (i, cls) in classifications[..result.count].iter().enumerate() {
             let request_start = bytes_consumed;
@@ -177,7 +201,56 @@ impl Connection {
             //   1. Benchmark fast path — Plaintext/Json: pre-baked bytes from snap
             //   2. AOT path — only if NotFound AND aot_table present: parse + handler
             //   3. NotFound fallback — pre-baked 404 from snap
+            //   4. Async path — Route::Db (pg-handles only): spawn on bridge, park
             let written = match cls.route {
+                #[cfg(feature = "pg-handles")]
+                Route::Db => {
+                    // If preceding pipelined requests already filled the write
+                    // region, flush those first; the /db stays in the read
+                    // buffer and will be re-classified on the next pass.
+                    if i > 0 {
+                        break;
+                    }
+                    // Consume the /db request bytes so we don't re-process them
+                    // when the connection wakes from the parked state.
+                    bytes_consumed = request_end;
+                    classified_consumed += 1;
+
+                    let pool = self.server.pg_pool.clone();
+                    match pool {
+                        Some(pool) => {
+                            let slot_id = (token & 0xFFFF_FFFF) as u32;
+                            let pool_for_task = pool.clone();
+                            bridge.spawn(slot_id, async move {
+                                crate::aot::db_handler::handle_db_random(&pool_for_task).await
+                            });
+                            self.park_for_async();
+                            parked_async = true;
+                            break;
+                        }
+                        None => {
+                            // pg-handles built but no pool — return 503 inline.
+                            const SVC_UNAVAIL: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                            if self.write_filled + SVC_UNAVAIL.len() > WRITE_REGION_BYTES {
+                                self.close();
+                                return Ok(false);
+                            }
+                            let write_slice = unsafe {
+                                std::slice::from_raw_parts_mut(
+                                    self.slot.write_ptr,
+                                    WRITE_REGION_BYTES,
+                                )
+                            };
+                            write_slice[self.write_filled..self.write_filled + SVC_UNAVAIL.len()]
+                                .copy_from_slice(SVC_UNAVAIL);
+                            self.write_filled += SVC_UNAVAIL.len();
+                            close_after = true;
+                            // Already accounted for bytes_consumed/classified_consumed above;
+                            // jump to the post-loop write submission.
+                            break;
+                        }
+                    }
+                }
                 Route::Plaintext | Route::Json => {
                     // Existing benchmark hot path. `snap` keeps the Arc alive for this fn.
                     let bytes = snap.get_ref(variant_for(*cls));
@@ -263,6 +336,15 @@ impl Connection {
             }
         }
         self.read_filled -= consumed;
+
+        // Async-parked path: bridge::spawn already running; the eventfd CQE
+        // will deliver the response and submit a Send. Don't submit_write here.
+        // State is already AwaitingAsync (set in the Db arm via park_for_async).
+        #[cfg(feature = "pg-handles")]
+        if parked_async {
+            debug_assert_eq!(self.write_filled, 0, "/db dispatch must not buffer prior writes");
+            return Ok(true);
+        }
 
         self.close_after_drain = close_after;
         self.state = State::Writing;
@@ -481,5 +563,9 @@ fn variant_for(cls: Classification) -> Variant {
         (Route::Json, true) => Variant::JsonClose,
         (Route::NotFound, false) => Variant::NotFoundKeepalive,
         (Route::NotFound, true) => Variant::NotFoundClose,
+        // Route::Db is dispatched via the async bridge and never reaches the
+        // pre-baked response table. Unreachable in steady state.
+        #[cfg(feature = "pg-handles")]
+        (Route::Db, _) => Variant::NotFoundClose,
     }
 }

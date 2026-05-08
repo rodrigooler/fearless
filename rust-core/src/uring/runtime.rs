@@ -25,7 +25,6 @@ pub fn run_with_aot(
     if let Some(table) = aot_table {
         server_builder = server_builder.with_aot_table(table);
     }
-    let server = Arc::new(server_builder);
 
     // Initialize the shared tokio runtime ONCE before spawning io_uring workers,
     // so each worker's `WorkerBridge::spawn` can rely on `runtime()` being set.
@@ -34,7 +33,19 @@ pub fn run_with_aot(
     #[cfg(feature = "pg-handles")]
     {
         crate::runtime::async_bridge::init_runtime(worker_count);
+        // Build the Postgres pool ONCE per process when the URL is set, then
+        // attach it to BenchmarkServer so all workers share a single Arc<Pool>.
+        // Missing URL is non-fatal — /db routes will return 503.
+        if std::env::var("FEARLESS_SQL_PRIMARY").is_ok() {
+            let rt = crate::runtime::async_bridge::runtime();
+            let pool = rt
+                .block_on(async { crate::runtime::pg_pool::build_primary_pool().await })
+                .map_err(|e| io::Error::other(format!("PG pool build failed: {e}")))?;
+            server_builder = server_builder.with_pg_pool(Arc::new(pool));
+        }
     }
+
+    let server = Arc::new(server_builder);
 
     let mut handles = Vec::with_capacity(worker_count);
     for i in 0..worker_count {
