@@ -25,19 +25,35 @@
       }
     }
   },
+  "pendingRun": {
+    "note": "Top-10 push landed but TFB run not executed yet. Run on Linux per docs/superpowers/plans/2026-05-08-handoff-linux.md",
+    "expectedNumbersTarget": {
+      "plaintext": ">= 6000000",
+      "json": ">= 3000000"
+    }
+  },
   "optimizations": {
     "rust": [
-      "Optional io-uring backend on Linux (feature = io-uring)",
+      "Per-thread io_uring runtime (one IoUring per OS thread, pinned via core_affinity)",
+      "Multishot accept (single AcceptMulti SQE handles N kernel-fired completions)",
+      "HTTP pipelining: parse N requests per Recv, write N concatenated responses per Send",
+      "Registered fixed buffer pool (1024 × 64 KiB slots) — zero per-accept heap allocation",
+      "Registered listener fd as fixed slot (Fixed(0) skips per-syscall fd lookup)",
+      "ArcSwap baked response cache — atomic single-pointer swap per second, no per-request allocation",
+      "Independent Date thread aligned to wall-clock second boundary",
+      "Optional SQPOLL (FEARLESS_SQPOLL_MS env, default 2000ms in container) — kernel-side polling",
+      "Hoisted completion-drain Vec out of accept hot loop (allocation-free in steady state)",
+      "Inline byte-prefix classifier (1.12 ns per request line on M-series, criterion-measured)",
+      "parse_pipeline 16-request batch in 191 ns (criterion-measured)",
+      "ArcSwap snapshot get in 4.71 ns (criterion-measured)",
+      "Dispatch fix: main.rs auto-detects benchmark manifest and routes to optimized path",
+      "Dropped tokio-uring (single-threaded) for raw io-uring crate",
+      "Optional io-uring backend on Linux (feature = io-uring) — gated dep, Mac builds clean",
       "SO_REUSEPORT with per-worker listeners (kernel-level load balancing)",
-      "BufReader with 32KB buffers (reduced syscalls)",
-      "Date cache shared across threads (no per-request formatting)",
-      "Eliminated ConnectionReader custom slow path (replaced with BufReader)",
-      "Unified fast-path static route lookup skipping header parsing",
-      "Workers default = available_parallelism * 2 (no low clamp)",
-      "#[inline] on 15+ hot path functions",
+      "Workers default = available_parallelism (one worker per core)",
+      "#[inline] on hot-path classifier and helper functions",
       "Fast path parsing for well-formed requests",
       "Unrolled ascii_eq_ignore_case for common lengths",
-      "Optimized trim_line_end_bytes",
       "Cached Arc references in route matching"
     ],
     "typescript": [
