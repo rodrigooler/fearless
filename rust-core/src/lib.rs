@@ -19,6 +19,7 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+pub mod aot;
 pub mod benchmark;
 
 #[cfg(all(target_os = "linux", feature = "io-uring"))]

@@ -7,6 +7,11 @@ edition = "2021"
 default = []
 io-uring = ["dep:io-uring", "dep:core_affinity"]
 
+# Turned on by `fearless build` when generated AOT handlers exist alongside
+# `src/aot/handlers.rs`. Off by default so the binary builds cleanly with no
+# user app (e.g. CI, benchmark images).
+aot-handlers = []
+
 [dependencies]
 arc-swap = "1.7"
 httpdate = "1"
