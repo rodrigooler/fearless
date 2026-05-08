@@ -45,18 +45,23 @@ fn worker_main(listener: TcpListener, server: Arc<BenchmarkServer>, core: Option
 }
 
 fn build_ring() -> io::Result<IoUring> {
-    let mut builder = IoUring::builder();
-    builder
-        .setup_coop_taskrun()
-        .setup_single_issuer()
-        .setup_defer_taskrun();
     let sqpoll_ms: u32 = std::env::var("FEARLESS_SQPOLL_MS")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
+
+    let mut builder = IoUring::builder();
+
     if sqpoll_ms > 0 {
+        // SQPOLL spawns a kernel-side submitter thread, which conflicts with several
+        // tuning flags that assume userspace controls SQE submission timing.
+        // We use ONLY setup_sqpoll when it's enabled — no other setup_* flags.
         builder.setup_sqpoll(sqpoll_ms);
+    } else {
+        // Without SQPOLL, lean on the modern userspace-driven completion path.
+        builder.setup_coop_taskrun().setup_single_issuer().setup_defer_taskrun();
     }
+
     builder.build(RING_ENTRIES)
 }
 
