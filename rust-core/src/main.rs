@@ -6,6 +6,12 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+// mimalloc as the system allocator. Better small-object performance than glibc malloc;
+// matters here because Arc<[u8]> reallocs (one per second on response refresh) and
+// per-connection state allocations all hit the global allocator.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn parse_args() -> Result<(u16, Option<PathBuf>), String> {
     let mut port: Option<u16> = None;
     let mut manifest: Option<PathBuf> = None;
