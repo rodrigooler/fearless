@@ -24,13 +24,14 @@ pub async fn handle_db_random(pool: &Pool) -> Vec<u8> {
         Ok(c) => c,
         Err(_) => return HTTP_503.to_vec(),
     };
-    let row = match client
-        .query_opt(
-            "SELECT id, randomnumber FROM world WHERE id = $1",
-            &[&id],
-        )
+    let stmt = match client
+        .prepare_cached("SELECT id, randomnumber FROM world WHERE id = $1")
         .await
     {
+        Ok(s) => s,
+        Err(_) => return HTTP_503.to_vec(),
+    };
+    let row = match client.query_opt(&stmt, &[&id]).await {
         Ok(Some(row)) => row,
         Ok(None) | Err(_) => return HTTP_503.to_vec(),
     };

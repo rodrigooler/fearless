@@ -1,6 +1,6 @@
 //! Build a deadpool-postgres pool from `FEARLESS_SQL_PRIMARY` env URL.
 //!
-//! Pool sizing: defaults to `num_cpus()` connections. Override with
+//! Pool sizing: defaults to 128 connections. Override with
 //! `FEARLESS_SQL_PRIMARY_POOL_SIZE`. Fail fast if the URL is missing or the
 //! pool can't establish a connection at startup.
 
@@ -37,7 +37,7 @@ pub async fn build_primary_pool() -> Result<Pool, PoolBuildError> {
         .ok()
         .map(|s| s.parse().map_err(|e: std::num::ParseIntError| PoolBuildError::InvalidPoolSize(e.to_string())))
         .transpose()?
-        .unwrap_or_else(num_cpus::get);
+        .unwrap_or(128);
 
     let pg_config: tokio_postgres::Config = url
         .parse()

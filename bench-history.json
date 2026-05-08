@@ -944,6 +944,174 @@
           "completed": 284681
         }
       }
+    },
+    {
+      "label": "2afc634-dirty",
+      "timestamp": "2026-05-08T18:56:05.790Z",
+      "git": {
+        "sha": "2afc634",
+        "message": "rust-core: plumb keep-alive through async /db dispatch (partial perf fix)",
+        "dirty": true
+      },
+      "note": "Phase 1.1 perf: pool=128 default + prepare_cached on /db",
+      "rig": {
+        "host": "darwin",
+        "node": "v24.11.1"
+      },
+      "scenarios": {
+        "aot/plaintext-c64": {
+          "description": "AOT /plaintext c=64",
+          "rps": 392121.56,
+          "p50_ms": 0.147,
+          "p99_ms": 0.622,
+          "non2xx": 0,
+          "completed": 3960236
+        },
+        "aot/json-c64": {
+          "description": "AOT /json c=64",
+          "rps": 437123.84,
+          "p50_ms": 0.121,
+          "p99_ms": 1.03,
+          "non2xx": 0,
+          "completed": 4414932
+        },
+        "aot/echo-c64": {
+          "description": "AOT /echo c=64",
+          "rps": 418801.94,
+          "p50_ms": 0.13,
+          "p99_ms": 0.93,
+          "non2xx": 0,
+          "completed": 4229727
+        },
+        "aot/config-c64": {
+          "description": "AOT /config c=64",
+          "rps": 430706.52,
+          "p50_ms": 0.122,
+          "p99_ms": 1.1,
+          "non2xx": 0,
+          "completed": 4349812
+        },
+        "aot/access-c64": {
+          "description": "AOT /access c=64 (header cond)",
+          "rps": 408689.33,
+          "p50_ms": 0.132,
+          "p99_ms": 1.21,
+          "non2xx": 4127665,
+          "completed": 4127665
+        },
+        "aot/db-c64": {
+          "description": "AOT /db c=64 (Postgres random world)",
+          "rps": 39817.69,
+          "p50_ms": 0.838,
+          "p99_ms": 200.64,
+          "non2xx": 0,
+          "completed": 402150
+        },
+        "aot/db-c256": {
+          "description": "AOT /db c=256 (MVP target ≥100k)",
+          "rps": 41969.38,
+          "p50_ms": 5.33,
+          "p99_ms": 200.08,
+          "non2xx": 0,
+          "completed": 423872
+        },
+        "aot/plaintext-pipe32": {
+          "description": "AOT /plaintext c=256 pipe-32",
+          "rps": 9783422.11,
+          "p50_ms": 0.446,
+          "p99_ms": 3.14,
+          "non2xx": 0,
+          "completed": 97982528
+        },
+        "aot/json-pipe32": {
+          "description": "AOT /json c=256 pipe-32",
+          "rps": 9957461.47,
+          "p50_ms": 0.421,
+          "p99_ms": 2.83,
+          "non2xx": 0,
+          "completed": 99667936
+        },
+        "aot/echo-pipe32": {
+          "description": "AOT /echo c=256 pipe-32",
+          "rps": 7550839.41,
+          "p50_ms": 0.549,
+          "p99_ms": 2.68,
+          "non2xx": 0,
+          "completed": 75616288
+        },
+        "bun/plaintext-c64": {
+          "description": "Bun /plaintext c=64",
+          "rps": 121452.15,
+          "p50_ms": 0.318,
+          "p99_ms": 195.57,
+          "non2xx": 0,
+          "completed": 1226657
+        },
+        "bun/json-c64": {
+          "description": "Bun /json c=64",
+          "rps": 119795.13,
+          "p50_ms": 0.322,
+          "p99_ms": 199.28,
+          "non2xx": 0,
+          "completed": 1209893
+        },
+        "bun/echo-c64": {
+          "description": "Bun /echo c=64",
+          "rps": 102476.21,
+          "p50_ms": 0.534,
+          "p99_ms": 176.35,
+          "non2xx": 0,
+          "completed": 1025540
+        },
+        "bun/db-c64": {
+          "description": "Bun /db (1 PG query)",
+          "rps": 45274.24,
+          "p50_ms": 1.02,
+          "p99_ms": 191.49,
+          "non2xx": 0,
+          "completed": 452996
+        },
+        "bun/queries-1-c64": {
+          "description": "Bun /queries?queries=1",
+          "rps": 44878.66,
+          "p50_ms": 1.09,
+          "p99_ms": 190.13,
+          "non2xx": 0,
+          "completed": 449114
+        },
+        "bun/queries-20-c64": {
+          "description": "Bun /queries?queries=20 (TFB std)",
+          "rps": 7608.84,
+          "p50_ms": 6.21,
+          "p99_ms": 207.41,
+          "non2xx": 0,
+          "completed": 76560
+        },
+        "bun/fib-10-c64": {
+          "description": "Bun /fib/10 (CPU trivial)",
+          "rps": 98762.1,
+          "p50_ms": 0.528,
+          "p99_ms": 183.51,
+          "non2xx": 0,
+          "completed": 997449
+        },
+        "bun/fib-20-c64": {
+          "description": "Bun /fib/20 (CPU ~0.2ms)",
+          "rps": 28137.8,
+          "p50_ms": 2.19,
+          "p99_ms": 4.37,
+          "non2xx": 0,
+          "completed": 284180
+        },
+        "bun/hash-100-c64": {
+          "description": "Bun /hash/100 (SHA256 x100)",
+          "rps": 28474.21,
+          "p50_ms": 2.03,
+          "p99_ms": 4.17,
+          "non2xx": 0,
+          "completed": 287791
+        }
+      }
     }
   ]
 }

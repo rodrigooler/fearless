@@ -355,7 +355,6 @@ dependencies = [
  "libc",
  "memchr",
  "mimalloc",
- "num_cpus",
  "parking_lot",
  "rustc-hash",
  "serde",
