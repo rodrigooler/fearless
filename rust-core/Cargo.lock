@@ -347,6 +347,7 @@ dependencies = [
  "libc",
  "memchr",
  "mimalloc",
+ "num_cpus",
  "rustc-hash",
  "serde",
  "serde_json",

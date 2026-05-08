@@ -25,6 +25,8 @@ pub mod benchmark;
 #[cfg(all(target_os = "linux", feature = "io-uring"))]
 pub mod uring;
 
+pub mod runtime;
+
 const SERVER_HEADER: &str = "Fearless";
 const STATIC_RESPONSE_VARIANTS: usize = 2;
 const DATE_LEN: usize = 29;
