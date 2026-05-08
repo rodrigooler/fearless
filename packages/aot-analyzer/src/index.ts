@@ -13,6 +13,12 @@ import { returnShapeRule } from "./rules/return-shape.js";
 import { templateSubstitutionsRule } from "./rules/template-substitutions.js";
 
 export type { AnalysisResult, Reason, Rule, RuleId, RuleContext } from "./types.js";
+export {
+  HANDLER_PARAM_NAME,
+  ALLOWED_CTX_BUILDERS,
+  ALLOWED_CTX_CHAINS,
+  ALLOWED_CTX_INPUTS,
+} from "./types.js";
 
 /**
  * The full set of Phase 0 rules. Order matters only for output stability —
