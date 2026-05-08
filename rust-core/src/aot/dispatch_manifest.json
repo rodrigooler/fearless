@@ -1,64 +1,52 @@
 [
   {
     "method": "GET",
-    "path": "/healthz",
+    "path": "/plaintext",
     "kind": "aot",
-    "fnName": "handler_0_template__healthz"
+    "fnName": "handler_0_template__plaintext"
   },
   {
     "method": "GET",
-    "path": "/version",
+    "path": "/json",
     "kind": "aot",
-    "fnName": "handler_1_template__version"
+    "fnName": "handler_1_template__json"
   },
   {
     "method": "GET",
-    "path": "/echo-static",
+    "path": "/echo/:name",
     "kind": "aot",
-    "fnName": "handler_2__echo_static"
+    "fnName": "handler_2__echo__name"
   },
   {
     "method": "GET",
-    "path": "/users/:id/exists",
+    "path": "/config",
     "kind": "aot",
-    "fnName": "handler_3__users__id_exists"
+    "fnName": "handler_3__config"
   },
   {
     "method": "GET",
-    "path": "/admin/area",
+    "path": "/access",
     "kind": "aot",
-    "fnName": "handler_4__admin_area"
+    "fnName": "handler_4__access"
   },
   {
     "method": "GET",
-    "path": "/greet/:name",
-    "kind": "aot",
-    "fnName": "handler_5__greet__name"
-  },
-  {
-    "method": "GET",
-    "path": "/created",
-    "kind": "aot",
-    "fnName": "handler_6__created"
-  },
-  {
-    "method": "GET",
-    "path": "/async-trivial",
-    "kind": "bun"
-  },
-  {
-    "method": "POST",
-    "path": "/upload",
+    "path": "/db",
     "kind": "bun"
   },
   {
     "method": "GET",
-    "path": "/users-by-name",
+    "path": "/queries",
     "kind": "bun"
   },
   {
     "method": "GET",
-    "path": "/parsed/:n",
+    "path": "/fib/:n",
+    "kind": "bun"
+  },
+  {
+    "method": "GET",
+    "path": "/hash/:n",
     "kind": "bun"
   }
 ]

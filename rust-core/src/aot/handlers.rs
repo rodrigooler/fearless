@@ -3,32 +3,24 @@
 use crate::aot::runtime as aot_runtime;
 use crate::aot::AotRouteTable;
 
-pub fn handler_0_template__healthz(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
+pub fn handler_0_template__plaintext(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
     // static response — bytes computed at compile time
-    out.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok");
+    out.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 13\r\nConnection: keep-alive\r\n\r\nHello, World!");
 }
 
-pub fn handler_1_template__version(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
+pub fn handler_1_template__json(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
     // static response — bytes computed at compile time
-    out.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 39\r\nConnection: keep-alive\r\n\r\n{\"version\":\"1.0.0\",\"commit\":\"deadbeef\"}");
+    out.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 27\r\nConnection: keep-alive\r\n\r\n{\"message\":\"Hello, World!\"}");
 }
 
-pub fn handler_2__echo_static(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
-    // static response — bytes computed at compile time
-    out.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 27\r\nConnection: keep-alive\r\n\r\n{\"ok\":true,\"kind\":\"static\"}");
-}
-
-pub fn handler_3__users__id_exists(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
+pub fn handler_2__echo__name(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
     // dynamic response — body length computed at runtime
     let mut body: Vec<u8> = Vec::with_capacity(64);
     body.extend_from_slice(b"{");
-    body.extend_from_slice(b"\"id\":");
+    body.extend_from_slice(b"\"hello\":");
     body.extend_from_slice(b"\"");
-    aot_runtime::write_json_string(&mut body, req.param("id"));
+    aot_runtime::write_json_string(&mut body, req.param("name"));
     body.extend_from_slice(b"\"");
-    body.extend_from_slice(b",");
-    body.extend_from_slice(b"\"exists\":");
-    body.extend_from_slice(b"true");
     body.extend_from_slice(b"}");
     out.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: keep-alive\r\nContent-Length: ");
     aot_runtime::write_decimal(out, body.len());
@@ -36,8 +28,13 @@ pub fn handler_3__users__id_exists(req: &aot_runtime::AotRequest, out: &mut Vec<
     out.extend_from_slice(&body);
 }
 
-pub fn handler_4__admin_area(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
-    if req.header("authorization") == "letmein" {
+pub fn handler_3__config(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
+    // static response — bytes computed at compile time
+    out.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 222\r\nConnection: keep-alive\r\n\r\n{\"service\":\"fearless\",\"version\":\"0.3.0\",\"features\":{\"aot\":true,\"templates\":true,\"hooks\":true},\"limits\":{\"maxBodyBytes\":10485760,\"maxConnections\":65535},\"endpoints\":{\"health\":\"/healthz\",\"metrics\":\"/metrics\",\"docs\":\"/docs\"}}");
+}
+
+pub fn handler_4__access(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
+    if req.header("x-key") == "secret" {
         // static response — bytes computed at compile time
         out.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: keep-alive\r\n\r\n{\"access\":\"granted\"}");
         return;
@@ -46,31 +43,12 @@ pub fn handler_4__admin_area(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
     out.extend_from_slice(b"HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: 18\r\nConnection: keep-alive\r\n\r\n{\"error\":\"denied\"}");
 }
 
-pub fn handler_5__greet__name(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
-    // dynamic response — body length computed at runtime
-    let mut body: Vec<u8> = Vec::with_capacity(64);
-    body.extend_from_slice(b"Hello, ");
-    body.extend_from_slice(req.param("name").as_bytes());
-    body.extend_from_slice(b"!");
-    out.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: keep-alive\r\nContent-Length: ");
-    aot_runtime::write_decimal(out, body.len());
-    out.extend_from_slice(b"\r\n\r\n");
-    out.extend_from_slice(&body);
-}
-
-pub fn handler_6__created(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
-    // static response — bytes computed at compile time
-    out.extend_from_slice(b"HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: 16\r\nConnection: keep-alive\r\n\r\n{\"created\":true}");
-}
-
 /// Register every AOT-compiled handler into the given route table.
 /// Called once at server startup; `table` is then shared (read-only) across all workers.
 pub fn register(table: &mut AotRouteTable) {
-    table.add("GET", "/healthz", handler_0_template__healthz);
-    table.add("GET", "/version", handler_1_template__version);
-    table.add("GET", "/echo-static", handler_2__echo_static);
-    table.add("GET", "/users/:id/exists", handler_3__users__id_exists);
-    table.add("GET", "/admin/area", handler_4__admin_area);
-    table.add("GET", "/greet/:name", handler_5__greet__name);
-    table.add("GET", "/created", handler_6__created);
+    table.add("GET", "/plaintext", handler_0_template__plaintext);
+    table.add("GET", "/json", handler_1_template__json);
+    table.add("GET", "/echo/:name", handler_2__echo__name);
+    table.add("GET", "/config", handler_3__config);
+    table.add("GET", "/access", handler_4__access);
 }
