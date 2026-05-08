@@ -1,7 +1,10 @@
 use arc_swap::ArcSwap;
 use std::sync::Arc;
+use std::time::Duration;
 
-use crate::benchmark::date::DATE_LEN;
+use crate::benchmark::date::{DateClock, DATE_LEN};
+
+const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 
 const SERVER: &str = "Fearless";
 
@@ -97,8 +100,6 @@ fn render(status: &str, content_type: &str, body: &[u8], date: &[u8; DATE_LEN], 
     out
 }
 
-use crate::benchmark::date::DateClock;
-
 pub struct BenchmarkServer {
     pub responses: Arc<BenchmarkResponses>,
     pub clock: Arc<DateClock>,
@@ -109,13 +110,16 @@ impl BenchmarkServer {
         let clock = DateClock::start();
         let responses = Arc::new(BenchmarkResponses::new());
         responses.refresh(&clock.snapshot());
-        let refresher_clock = Arc::clone(&clock);
-        let refresher_responses = Arc::clone(&responses);
+        let weak_clock = Arc::downgrade(&clock);
+        let weak_responses = Arc::downgrade(&responses);
         std::thread::Builder::new()
             .name("fearless-resp-refresh".into())
             .spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                refresher_responses.refresh(&refresher_clock.snapshot());
+                std::thread::sleep(REFRESH_INTERVAL);
+                let (Some(c), Some(r)) = (weak_clock.upgrade(), weak_responses.upgrade()) else {
+                    return;
+                };
+                r.refresh(&c.snapshot());
             })
             .expect("spawn refresher");
         Self { responses, clock }
