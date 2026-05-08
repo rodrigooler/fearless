@@ -342,7 +342,7 @@ impl Connection {
         // State is already AwaitingAsync (set in the Db arm via park_for_async).
         #[cfg(feature = "pg-handles")]
         if parked_async {
-            debug_assert_eq!(self.write_filled, 0, "/db dispatch must not buffer prior writes");
+            assert_eq!(self.write_filled, 0, "/db dispatch must not buffer prior writes");
             return Ok(true);
         }
 
