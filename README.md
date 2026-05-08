@@ -1,210 +1,236 @@
 # Fearless
 
-Fearless is a Rust-first microframework with a very small TypeScript surface. TypeScript stays responsible for the developer API and orchestration, while Rust owns the hot path whenever the app shape allows it.
+A microframework with a functional handler API for building fast HTTP services in TypeScript. Static benchmark-style routes can be served by an optional Rust core for top-tier throughput.
 
-The design goal is not to ship a giant ecosystem of batteries and wrappers. The goal is to give you a fast core, a small set of built-in helpers, and enough room to choose your own validation and application-level abstractions.
+> Recent local benchmark on Mac/OrbStack: **8.5M req/s** plaintext pipelined, **455k req/s** non-pipelined. See [Performance](#performance).
 
-## Project Docs
+## Quick start
 
-- [License](./LICENSE)
-- [Contributing](./CONTRIBUTING.md)
-- [Contributors](./CONTRIBUTORS.md)
-- [Pull Request Template](./.github/PULL_REQUEST_TEMPLATE.md)
+### Install
 
-## What It Is
-
-Fearless combines three layers:
-
-1. A TypeScript application layer for declarative route registration, manifest building, and compatibility wrappers.
-2. A Rust core for the hot path used by benchmark-style endpoints such as `/plaintext` and `/json`.
-3. A minimal helper layer for common concerns like CORS and security headers, compiled into Rust when possible.
-
-The runtime is intentionally small, but it can choose the fastest available path for the current shape of the app:
-
-- Rust for declarative static routes and helper-compatible workloads
-- Node HTTP/1.1 for compatibility mode
-- Node HTTP/2 when TLS is enabled and the app opts into it
-
-That split keeps the framework flexible without forcing every request through a large abstraction stack.
-
-## Repository & Install
-
-Main repository:
-
-- [https://github.com/rodrigooler/fearless](https://github.com/rodrigooler/fearless)
-
-If you want to install directly from Git in another project, use:
-
-```json
-{
-  "dependencies": {
-    "fearless": "git+https://github.com/rodrigooler/fearless.git#main"
-  }
-}
-```
-
-Or with npm:
+Fearless is currently distributed from git (the npm package name is `microu`, but it is not yet published to the registry).
 
 ```bash
 npm install git+https://github.com/rodrigooler/fearless.git#main
 ```
 
-### Do I need Rust installed?
+### Hello, World
 
-- If you use the Rust hot path from source, yes, you need a Rust toolchain available because the framework compiles the Rust core when it starts.
-- If you provide a prebuilt binary through `rustCoreBinary`, the framework will use that binary instead of building locally.
-- If you only use the Node compatibility mode, you may not need Rust on that machine.
-
-## Why It Exists
-
-Most frameworks optimize for breadth. Fearless optimizes for two things at the same time:
-
-- low overhead on the critical path
-- a small, understandable public API
-
-The practical result is:
-
-- fewer allocations on the hot path
-- less middleware overhead when you do not need it
-- a predictable runtime surface
-- easy benchmarking against TechEmpower-style workloads
-- a framework that stays pleasant to use even when you keep it lean
-
-## Performance Model
-
-Fearless is built around a few performance decisions:
-
-- static routes can be served by Rust directly
-- `plaintext` and `json` are precompiled into a manifest for the Rust core
-- built-in helpers like `securityHeaders()` and `cors()` can be compiled into the Rust manifest when they are compatible
-- response payloads are cached per second so `Date` does not force per-request work
-- route lookup is optimized for exact paths first
-- parametric route lookup uses a trie instead of linear scans
-- request parsing avoids unnecessary work on the hot path
-- the framework does not require a validation library in core
-- local perf tools are available via `npm run bench:load` and `npm run bench:micro`
-
-This means the framework can stay lightweight while still achieving serious throughput on a simple benchmark profile.
-
-### Latest benchmark baseline
-
-The current benchmark baseline in this repository is derived from the official TechEmpower clone and is tracked in [`benchmark.json`](./benchmark.json).
-
-Recent measured peaks:
-
-- `plaintext`: about `2.52M req/s`
-- `json`: about `1.37M req/s`
-
-Those numbers depend on the exact host, worker scheduling, and benchmark configuration, but they are a useful current reference point for the Rust hot path.
-
-## Built-In Helpers
-
-Fearless ships a few helpers that are intentionally small and dependency-light:
-
-- `cors()` for cross-origin access control
-- `securityHeaders()` for common security headers
-
-These are provided so you do not need to install a large middleware package just to get a basic setup working.
-
-## Validation Philosophy
-
-Validation is intentionally not hard-wired to one specific library.
-
-Fearless accepts validator functions, so you can plug in whatever you want:
-
-- a tiny handwritten validator
-- a schema library you already use
-- a shared validation layer from your own app
-
-This keeps the framework flexible and avoids forcing one validation ecosystem into the core package.
-
-Example:
+Create `server.ts`:
 
 ```ts
-type User = {
-  name: string;
-  email: string;
-  age: number;
-};
+import { App } from "fearless";
 
-function parseUser(data: unknown): User | null {
-  if (!data || typeof data !== "object") {
-    return null;
-  }
+const app = new App({ port: 3000 });
 
-  const candidate = data as Record<string, unknown>;
-  if (
-    typeof candidate.name !== "string" ||
-    typeof candidate.email !== "string" ||
-    typeof candidate.age !== "number"
-  ) {
-    return null;
-  }
+app.get("/", (ctx) => ctx.json({ ok: true }));
 
-  return {
-    name: candidate.name,
-    email: candidate.email,
-    age: candidate.age,
-  };
-}
+app.get("/users/:id", (ctx) => {
+  return ctx.json({ id: ctx.params.id, name: "Alice" });
+});
+
+app.post("/users", async (ctx) => {
+  const body = await ctx.body<{ name: string }>();
+  return ctx.status(201).json({ id: "new", name: body.name });
+});
+
+app.listen((started) => {
+  if (started) console.log("Listening on http://localhost:3000");
+});
 ```
 
-You can pass that function into `req.parseBodyRaw(...)`, `req.parseBody(...)`, or `req.json(...)` in compatibility mode. `createValidator(...)` gives you a standardized `{ ok, data, errors }` result.
+### Run
 
-## API Overview
+```bash
+npx tsx server.ts
+```
 
-### `App`
+That's it. No config files, no decorators, no plugins to wire up.
 
-Create an app, register declarative routes, optionally add compiled built-ins, and start listening.
+## Why Fearless
 
-Supported route methods:
+- **Functional handler API.** `(ctx) => Response` — return a `Response`, no `(req, res, next)` mess.
+- **Hooks for everything else.** `onRequest` for auth, `onResponse` for logging, `onError` for recovery.
+- **Optional Rust hot path.** Static routes and benchmark-style endpoints can be served by a Rust binary at multi-million RPS without changing your code.
+- **Small surface.** ~10 public types. No DI container, no decorator soup, no required validation library.
+- **Bun + Node compatible.** Pick your runtime; same handlers work everywhere.
 
-- `get`
-- `post`
-- `put`
-- `patch`
-- `delete`
-- `options`
-- `head`
+## Routing
 
-Content helpers:
+```ts
+app.get("/health", (ctx) => ctx.json({ ok: true }));
+app.post("/users", (ctx) => ctx.status(201).json({ id: "new" }));
+app.put("/users/:id", (ctx) => ctx.json({ id: ctx.params.id }));
+app.patch("/users/:id", (ctx) => ctx.json({ id: ctx.params.id }));
+app.delete("/users/:id", (ctx) => ctx.noContent());
+app.options("/users", (ctx) => ctx.noContent());
+app.head("/users/:id", (ctx) => ctx.noContent());
+```
 
-- `text`
-- `json`
-- `html`
+Path params are exposed on `ctx.params`. Query strings are pre-parsed on `ctx.query` (values are `string | string[]`).
 
-Lifecycle:
+```ts
+app.get("/search", (ctx) => {
+  const q = ctx.query.q;       // "hello"
+  const tags = ctx.query.tags; // ["a", "b"] when repeated
+  return ctx.json({ q, tags });
+});
+```
 
-- `listen()`
-- `close()`
-- `runtime` and `httpVersion` options for runtime selection and TLS transport choice
+`HEAD` requests automatically fall back to the matching `GET` handler if no explicit `HEAD` route is registered.
 
-### `Request`
+## Handler context (Ctx)
 
-The request wrapper is mainly useful in Node compatibility mode. It exposes:
+`Ctx` is the single object every handler and hook receives. It bundles request inputs, lazy body parsers, response builders, and a per-request `state` bag.
 
-- normalized `path`
-- parsed `query`
-- normalized `headers`
-- path parameters in `params`
-- client `ip`
-- JSON body parsing helpers
+### Inputs
 
-### `Response`
+```ts
+app.get("/inspect/:id", (ctx) => {
+  ctx.method;   // "GET"
+  ctx.path;     // "/inspect/42"
+  ctx.params;   // { id: "42" }
+  ctx.query;    // parsed query string
+  ctx.headers;  // normalized lowercase header map
+  ctx.ip;       // client IP
+  ctx.state;    // mutable bag shared across hooks + handler
+  return ctx.json({ ok: true });
+});
+```
 
-The response wrapper is mainly useful in Node compatibility mode. It exposes:
+### Body parsing
 
-- `status()`
-- `json()`
-- `text()`
-- `html()`
-- `send()`
-- `setHeader()`
-- `setHeaders()`
-- `getResponse()`
-- `isEnded()`
+All body parsers are lazy. They consume the stream on first call.
 
-## Example
+```ts
+await ctx.body<MyShape>();   // JSON, throws HttpError(400) on invalid
+await ctx.text();            // raw text
+await ctx.formData();        // multipart/form-data
+await ctx.validate(parser);  // parse + validate; throws ValidationError (422)
+```
+
+### Response builders
+
+Every builder returns a standard web `Response`.
+
+```ts
+ctx.json({ ok: true });               // 200 application/json
+ctx.json(data, 201);                  // status as second arg
+ctx.html("<h1>hi</h1>");              // 200 text/html
+ctx.raw("raw body", { status: 200 }); // anything `new Response()` accepts
+ctx.redirect("/login", 302);          // 301 | 302 | 303 | 307 | 308
+ctx.notFound("user not found");       // 404
+ctx.noContent();                      // 204
+```
+
+### Chainable status / headers
+
+Apply once, consumed by the next builder call.
+
+```ts
+return ctx
+  .status(202)
+  .header("x-trace", id)
+  .setHeaders({ "cache-control": "no-store" })
+  .json({ accepted: true });
+```
+
+## Validation
+
+`ctx.validate` runs your validator and throws a `ValidationError` (422) on null/undefined.
+
+```ts
+type User = { name: string; email: string };
+
+function parseUser(data: unknown): User | null {
+  if (!data || typeof data !== "object") return null;
+  const c = data as Record<string, unknown>;
+  if (typeof c.name !== "string" || typeof c.email !== "string") return null;
+  return { name: c.name, email: c.email };
+}
+
+app.post("/users", async (ctx) => {
+  const user = await ctx.validate(parseUser);
+  return ctx.status(201).json(user);
+});
+```
+
+Use any validator that returns `T | null`. Hand-written guards work; so does Zod's `.safeParse` (just adapt `success ? data : null`). The framework does not bind to a schema library.
+
+## Errors
+
+Throw `HttpError` from any handler or hook and it becomes a structured response.
+
+```ts
+import { HttpError } from "fearless";
+
+app.get("/users/:id", (ctx) => {
+  const user = users.get(ctx.params.id);
+  if (!user) throw HttpError.notFound(`user ${ctx.params.id} not found`);
+  return ctx.json(user);
+});
+```
+
+Factories:
+
+| Factory | Status |
+|---|---|
+| `HttpError.badRequest(msg, details?)` | 400 |
+| `HttpError.unauthorized(msg?)` | 401 |
+| `HttpError.forbidden(msg?)` | 403 |
+| `HttpError.notFound(msg?)` | 404 |
+| `HttpError.conflict(msg, details?)` | 409 |
+| `HttpError.internal(msg?, cause?)` | 500 |
+| `ValidationError` (extends `HttpError`) | 422 |
+
+4xx responses include the message you pass. 5xx responses hide the message and surface a generic body — your `cause` stays in the log, not on the wire.
+
+## Middleware (hooks)
+
+Three lifecycle points. Hooks run in registration order.
+
+### `onRequest` — runs before the handler
+
+Return a `Response` to short-circuit (auth, rate limits). Return `void` to continue.
+
+```ts
+app.onRequest((ctx) => {
+  ctx.state.startTime = Date.now();
+});
+
+app.onRequest((ctx) => {
+  if (!ctx.headers.authorization) {
+    return ctx.status(401).json({ error: "unauthorized" });
+  }
+});
+```
+
+### `onResponse` — runs after the handler
+
+Inspect or replace the response. Return `void` to keep it as-is.
+
+```ts
+app.onResponse((ctx, response) => {
+  const ms = Date.now() - (ctx.state.startTime as number);
+  console.log(`${ctx.method} ${ctx.path} ${response.status} (${ms}ms)`);
+});
+```
+
+### `onError` — runs when anything throws
+
+Return a `Response` to recover. Return `void` to fall through to the next error hook (or the default 500).
+
+```ts
+app.onError((ctx, error) => {
+  if (error instanceof HttpError) return error.toResponse();
+  console.error(error);
+  return ctx.status(500).json({ error: "Internal" });
+});
+```
+
+`ctx.state` is shared across all hooks and the handler within a single request. Use it for request id, auth subject, timing, etc.
+
+## Built-in helpers
 
 ```ts
 import { App, cors, securityHeaders } from "fearless";
@@ -213,65 +239,92 @@ const app = new App({ port: 3000 });
 
 app.use(cors());
 app.use(securityHeaders());
+```
 
+Both are intentionally minimal. They configure CORS preflight and a default set of security headers and — when the app shape allows it — get compiled into the Rust manifest so they cost nothing on the hot path.
+
+## Templates and the Rust hot path
+
+The framework also accepts declarative template routes with no handler function:
+
+```ts
 app.text("/plaintext", "Hello, World!");
 app.json("/json", { message: "Hello, World!" });
-app.get("/users/:id", {
-  kind: "json",
-  body: {
-    id: "{{ params.id }}",
-    hello: "world",
-  },
-});
+app.html("/welcome", "<h1>Welcome</h1>");
+```
 
-app.listen((started) => {
-  if (started) {
-    console.log("Fearless is running on http://localhost:3000");
-  }
+Template routes can be served by the Rust core at 8M+ RPS pipelined because there is no JS function to call per request. Mix templates and handlers freely in the same app — handler routes automatically run on the Node/Bun side.
+
+Template tokens interpolate request data:
+
+```ts
+app.json("/users/:id", { id: "{{ params.id }}" });
+```
+
+Templates are the right tool for static content and benchmark-style endpoints. For real application logic — branching, validation, DB calls — use handlers.
+
+## Examples
+
+| Example | Shows |
+|---|---|
+| [hello-world](./examples/hello-world/) | Smallest possible app. |
+| [rest-crud](./examples/rest-crud/) | In-memory CRUD with validation, status codes, and `HttpError`. |
+| [with-middleware](./examples/with-middleware/) | Auth, logging, and error handling via hooks. |
+| [microservice](./examples/microservice/) | Health probes, Prometheus metrics, graceful shutdown. |
+
+Run any example:
+
+```bash
+npx tsx examples/<name>/server.ts
+```
+
+## Runtime selection
+
+```ts
+new App({ runtime: "auto" }); // prefer Rust > Bun > Node (default)
+new App({ runtime: "node" }); // force Node
+new App({ runtime: "rust" }); // force Rust (template-only apps)
+```
+
+For HTTPS, pass `keyFileName` and `certFileName`. For HTTP/2, set `httpVersion: "2"` (requires HTTPS).
+
+```ts
+new App({
+  port: 443,
+  keyFileName: "./key.pem",
+  certFileName: "./cert.pem",
+  httpVersion: "2",
 });
 ```
 
-## TechEmpower Benchmarking
+See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for what runs where.
 
-Fearless has an official TechEmpower benchmark target in the sibling clone under `FrameworkBenchmarks`.
+## Performance
 
-That target exists so we can measure the real framework implementation against the same benchmark harness used by the broader ecosystem, instead of relying on a separate local benchmark that drifts over time.
+Local rig (Mac M-series + OrbStack VM with 10 vCPU, `wrk` over Docker host network):
 
-If you are working on performance:
+| Workload | Throughput |
+|---|---|
+| `/plaintext` non-pipelined c=256 | 455,169 req/s |
+| `/plaintext` pipeline-16 c=256   | 5,713,819 req/s |
+| `/plaintext` pipeline-32 c=256   | 8,533,881 req/s |
+| `/json` non-pipelined c=64       | 406,394 req/s |
 
-- run the TechEmpower verify step first
-- benchmark only the relevant tests
-- compare the same host, same build, and same worker settings
+For context, the older TFB Citrine baseline this repo tracked was ~2.78M req/s plaintext and ~1.36M req/s JSON on bare metal. Fearless meets and exceeds that on weaker hardware via OrbStack.
 
-The current repository also stores a compact summary of the latest baseline in [`benchmark.json`](./benchmark.json).
-
-For the current Rust-first split and what runs where, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).
-
-## Philosophy
-
-Fearless tries to stay useful without becoming bloated:
-
-- the runtime is internal, so implementation details can change without breaking the public API
-- helper packages exist, but they stay small and optional
-- validation is user-controlled instead of framework-controlled
-- the Rust hot path is there for throughput, not for ceremony
-
-That makes the framework a good fit when you want:
-
-- a small framework with real performance ambition
-- a baseline that is easy to understand and test
-- a foundation you can extend without carrying unnecessary dependencies
+See [`benchmark.json`](./benchmark.json) for raw data and [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the Rust/TypeScript split.
 
 ## Development
 
-Typical commands:
-
 ```bash
+npm install
 npm run build
 npm test
 npm run bench:tfb
 ```
 
-## License
+## License & Contributing
 
-See the project repository for license information.
+- [LICENSE](./LICENSE)
+- [CONTRIBUTING.md](./CONTRIBUTING.md)
+- [CONTRIBUTORS.md](./CONTRIBUTORS.md)
