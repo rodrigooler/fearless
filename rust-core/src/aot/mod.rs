@@ -9,10 +9,10 @@
 //! and CI). When the flag is on, `cargo build` expects `aot/handlers.rs` to
 //! exist alongside this `mod.rs`.
 
+pub mod dispatch;
 pub mod runtime;
 
 #[cfg(feature = "aot-handlers")]
 pub mod handlers;
 
-#[cfg(feature = "aot-handlers")]
-pub use handlers::*;
+pub use dispatch::{AotHandlerFn, AotRoute, AotRouteTable, RouteSegment};
