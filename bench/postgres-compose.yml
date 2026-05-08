@@ -1,7 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: fearless-bench-pg
+    container_name: fearless-bench-pg   # fixed name: re-run requires `docker compose -f bench/postgres-compose.yml down` first
     environment:
       POSTGRES_USER: fearless
       POSTGRES_PASSWORD: fearless
@@ -22,4 +22,4 @@ services:
       - "-c"
       - "shared_buffers=256MB"
       - "-c"
-      - "synchronous_commit=off"
+      - "synchronous_commit=off"   # bench only: skip fsync for throughput
