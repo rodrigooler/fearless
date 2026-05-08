@@ -1,0 +1,180 @@
+# Fearless
+
+> A TypeScript microframework with a hybrid Rust+Bun runtime. Declarative routes execute in a Rust core at multi-million RPS; function handlers execute on Bun. Both ship in the same deployable unit. The roadmap is to grow the Rust-compiled subset over time so user TypeScript automatically gets faster across releases.
+
+This file is a project map for new contributors (humans or AI agents) coming into the codebase. It is short on purpose. Follow the links to drill in.
+
+## What you should read first, in order
+
+1. [`README.md`](./README.md) — public-facing overview, public API, performance honesty.
+2. [`ARCHITECTURE.md`](./ARCHITECTURE.md) — the Rust/TypeScript split, what runs where, future direction.
+3. [`AGENTS.md`](./AGENTS.md) — coding rules and hot-path discipline. **Mandatory read before editing source.**
+4. [`docs/superpowers/plans/2026-05-08-aot-strategy.md`](./docs/superpowers/plans/2026-05-08-aot-strategy.md) — the multi-quarter AOT strategy. Explains why the architecture is hybrid Rust+Bun and where it goes.
+5. [`docs/superpowers/plans/2026-05-08-perf-roadmap-tiers.md`](./docs/superpowers/plans/2026-05-08-perf-roadmap-tiers.md) — three tiers of perf work still on the table for the existing Rust core.
+
+## Repo layout
+
+```
+fearless/
+├── src/                    TypeScript application surface
+│   ├── app.ts              App class — route registration, dispatcher, hooks
+│   ├── ctx.ts              RequestContext — Ctx implementation for Node + Bun
+│   ├── middleware.ts       HookChain — onRequest/onResponse/onError pipeline
+│   ├── errors.ts           HttpError, ValidationError
+│   ├── types.ts            Public types (Ctx, Handler, hooks, RouteResponseSpec)
+│   ├── request.ts          Node-compat Request wrapper (legacy template path)
+│   ├── response.ts         Node-compat Response wrapper (legacy template path)
+│   ├── path.ts             Path normalization
+│   ├── rust-core.ts        Rust binary lifecycle (spawn, manifest, shutdown)
+│   ├── techempower*.ts     TFB-specific entry points
+│   ├── dependencies/       Built-in helpers (cors, securityHeaders)
+│   └── index.ts            Public exports — single source of truth for the API surface
+│
+├── rust-core/              Optional Rust HTTP core
+│   ├── src/lib.rs          ~2000 lines — manifest types, RouteTable, std::net path
+│   ├── src/uring/          io_uring runtime (Linux+feature gated)
+│   │   ├── mod.rs
+│   │   ├── runtime.rs      Per-thread ring construction, CPU pinning, SQPOLL
+│   │   ├── accept.rs       Multishot accept loop
+│   │   ├── connection.rs   Per-connection state machine + pipelining
+│   │   └── buffers.rs      FixedBuffers — 1024 × 64KiB registered slots
+│   ├── src/benchmark/      Benchmark fast path
+│   │   ├── responses.rs    ArcSwap baked responses
+│   │   ├── date.rs         Date thread (atomic [u8; 29] swap)
+│   │   └── parser.rs       Pipelined classifier
+│   ├── src/main.rs         CLI — auto-detects benchmark manifest, dispatches
+│   └── benches/            Criterion micro-benchmarks
+│
+├── examples/               End-user examples (run via `npx tsx`)
+│   ├── hello-world/        Minimal app
+│   ├── rest-crud/          CRUD + validation + HttpError
+│   ├── with-middleware/    onRequest/onResponse/onError patterns
+│   ├── microservice/       Health probes, Prometheus metrics, graceful shutdown
+│   └── basic.ts            Original template-only example (kept for `npm run dev`)
+│
+├── test/                   Node test runner suites (`node --import tsx --test`)
+│   ├── api-surface.test.ts Public API coverage
+│   ├── ctx.test.ts         RequestContext unit tests
+│   ├── middleware.test.ts  HookChain unit tests
+│   ├── handler.test.ts     End-to-end handler routes via real HTTP
+│   ├── http-engine.test.ts Node + Bun engine smoke
+│   ├── request-response.test.ts  Legacy compat wrappers
+│   ├── rust-core.test.ts   Rust binary spawn + manifest
+│   └── cors.test.ts        cors() built-in
+│
+├── bench/                  Benchmark scripts
+│   ├── load.ts             Local autocannon driver
+│   ├── micro.ts            Per-route micro-benches
+│   └── techempower/        TFB harness inputs (dockerfiles, manifest)
+│
+├── docs/superpowers/plans/ Strategy + roadmap docs (multiple, dated)
+├── benchmark.json          Latest bench results + optimization changelog
+├── package.json            npm config (name: "microu" — legacy)
+├── .oxlintrc.json          Optional oxlint config aligned with AOT-friendly patterns
+├── README.md               Public-facing docs
+├── ARCHITECTURE.md         Runtime split
+├── AGENTS.md               Coding rules — READ BEFORE EDITING
+├── CONTRIBUTING.md         Contribution flow
+└── LICENSE
+```
+
+## Critical concepts
+
+### Hybrid runtime
+
+A Fearless app runs as **two coordinated processes**:
+
+1. **rust-core (binary).** Owns port 8080. Serves declarative template routes (`app.text`, `app.json`, `app.html`) at multi-million RPS. Handles connection lifecycle, HTTP parsing, pipelining.
+2. **Node or Bun (TS).** Owns the rest — function handlers, hooks, JS-side application logic.
+
+When the app has no function handlers, the Rust core can serve everything alone. When the app has function handlers, the dispatcher today routes those to Node/Bun. The [AOT strategy](./docs/superpowers/plans/2026-05-08-aot-strategy.md) describes how function handlers will progressively compile to Rust at build time.
+
+### Routing model
+
+Routes are registered through `App`. The internal `RouteDefinition` is a discriminated union:
+
+```ts
+type RouteDefinition =
+  | { kind: "template"; method; compiledPath; response: RouteResponseSpec } // Rust-eligible
+  | { kind: "handler"; method; compiledPath; handler: Handler };            // Node/Bun
+```
+
+`app.get(path, ctx => ...)` registers a `handler`. `app.json(path, body)` registers a `template`. Mix freely. If any route is a `handler`, the app cannot use the Rust runtime (templates can still be served by Node/Bun in fallback mode).
+
+### Ctx — the handler argument
+
+`Ctx` is the single object passed to every handler and hook. Defined in [`src/types.ts`](./src/types.ts). Implementation in [`src/ctx.ts`](./src/ctx.ts) (`RequestContext` class with `fromNode` and `fromWeb` factories). API surface intentionally small:
+
+- inputs: `method, path, url, params, query, headers, ip, state`
+- body: `body<T>(), text(), formData(), validate(fn)`
+- response builders: `json(), html(), raw(), redirect(), notFound(), noContent()`
+- chainable: `status(), header(), setHeaders()`
+
+### Hook pipeline
+
+Three lifecycle points run by [`HookChain`](./src/middleware.ts) around every handler:
+
+1. `onRequest` — runs before the handler. Returning a `Response` short-circuits.
+2. handler runs.
+3. `onResponse` — can replace the response.
+4. `onError` — runs only if anything in 1-3 throws. Can recover with a `Response`. If all error hooks return undefined, default 500 fallback (or `HttpError.toResponse` if the thrown error was an `HttpError`).
+
+### Rust core entry points
+
+- `run_server(manifest, port)` — generic dynamic dispatch through the `RouteTable`. Used when the manifest has non-benchmark routes.
+- `run_benchmark_server(port)` — optimized dispatch for `/plaintext` + `/json`. On Linux+`io-uring` feature, this path uses the multi-thread io_uring runtime under [`src/uring/`](./rust-core/src/uring/).
+- `main.rs` auto-detects which path to use based on the loaded manifest shape.
+
+## Common commands
+
+```bash
+# JS / TS
+npm install                  # install deps
+npm run build                # tsc -> dist/
+npm run dev                  # tsx watch examples/basic.ts
+npm test                     # JS tests + Rust check
+npm run test:js              # JS tests only
+npm run lint                 # oxlint report
+npm run lint:fix             # oxlint autofix safe rules
+npm run bench:micro          # tinybench JS micro-benches
+npm run bench:tfb            # full TFB harness run
+
+# Rust
+cargo build --release --manifest-path rust-core/Cargo.toml
+cargo build --release --manifest-path rust-core/Cargo.toml --features io-uring
+cargo test --manifest-path rust-core/Cargo.toml
+cargo bench --manifest-path rust-core/Cargo.toml
+
+# End-to-end (local Linux via OrbStack)
+docker build -f bench/techempower/fearless-rust.dockerfile -t fearless-rust:test .
+docker run -d --name fearless-bench \
+  --ulimit memlock=-1 --cap-add SYS_NICE \
+  --security-opt seccomp=unconfined \
+  -e FEARLESS_SQPOLL_MS=0 \
+  -p 8080:8080 fearless-rust:test
+```
+
+## Coding rules
+
+The full rule set lives in [`AGENTS.md`](./AGENTS.md). A non-exhaustive condensation:
+
+- Public API stays small. Adding to `src/index.ts` is a real decision.
+- Hot path (Rust + TS dispatcher) avoids allocations, per-request work, and unnecessary abstractions.
+- Validation is pluggable. Do not bind to a specific schema library in core.
+- New built-ins must be tiny and dependency-light. `cors()` and `securityHeaders()` are the existing examples.
+- TypeScript code aims to be AOT-compatible (no `any`, prefer `const`, no closures over mutable state, no dynamic property access). The optional `oxlint` config is the day-to-day enforcer.
+- Rust changes that touch the request hot path require a benchmark before/after.
+- Conventional commits with scopes: `feat(rust-core)`, `perf(rust-core)`, `fix(ts)`, `docs`, `test`, `chore`.
+
+## Where to record decisions
+
+- Implementation plans: `docs/superpowers/plans/YYYY-MM-DD-<topic>.md`
+- Local benchmark snapshots: append to `docs/superpowers/plans/2026-05-07-baselines.md` and update `benchmark.json`
+- Strategy / direction: a new doc under `docs/superpowers/plans/`, then link from this file's reading list
+
+## When in doubt
+
+- Read [`AGENTS.md`](./AGENTS.md).
+- Read the relevant strategy doc under [`docs/superpowers/plans/`](./docs/superpowers/plans/).
+- Run the existing tests before changing anything (`npm test`, `cargo test`).
+- Prefer a small PR that lands cleanly over a big PR with regressions. Multi-step changes get split into commits per the discriminated step (see recent git history for examples — Phase 0/1/2/3/4 of the io_uring sprint each landed as multiple small commits).

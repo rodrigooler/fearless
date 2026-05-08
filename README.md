@@ -1,8 +1,10 @@
 # Fearless
 
-A microframework with a functional handler API for building fast HTTP services in TypeScript. Static benchmark-style routes can be served by an optional Rust core for top-tier throughput.
+A TypeScript microframework with a hybrid Rust+Bun runtime. You write idiomatic TS; the framework runs as much of it as it can on a Rust core, and falls back to Bun for the rest. Both ship in the same deployable unit.
 
-> Recent local benchmark on Mac/OrbStack: **8.5M req/s** plaintext pipelined, **455k req/s** non-pipelined. See [Performance](#performance).
+Today: declarative routes (`app.text`, `app.json`) execute in the Rust core at multi-million req/s. Function handlers (`app.get(path, ctx => ...)`) execute on Bun. Tomorrow (see [AOT roadmap](./docs/superpowers/plans/2026-05-08-aot-strategy.md)): more of your handler code compiles to Rust automatically — same code, no migration.
+
+> **What that means for benchmarks:** plaintext / JSON routes hit ~8.5M req/s pipelined on a Mac OrbStack VM (Rust core). Handler routes hit Bun-class throughput (~400-800k req/s). The Rust number is real but not the whole picture — be honest with yourself about which path your endpoints take. See [Performance](#performance) for the breakdown.
 
 ## Quick start
 
@@ -49,11 +51,11 @@ That's it. No config files, no decorators, no plugins to wire up.
 
 ## Why Fearless
 
+- **Hybrid runtime that grows.** Rust serves what it can today (declarative routes); Bun serves the rest. The AOT roadmap moves more handler code into Rust over releases — your existing code gets faster automatically.
 - **Functional handler API.** `(ctx) => Response` — return a `Response`, no `(req, res, next)` mess.
 - **Hooks for everything else.** `onRequest` for auth, `onResponse` for logging, `onError` for recovery.
-- **Optional Rust hot path.** Static routes and benchmark-style endpoints can be served by a Rust binary at multi-million RPS without changing your code.
 - **Small surface.** ~10 public types. No DI container, no decorator soup, no required validation library.
-- **Bun + Node compatible.** Pick your runtime; same handlers work everywhere.
+- **DX that pushes you toward fast code.** Optional [oxlint config](#linting-optional) flags patterns that block AOT (think: `await db.query` in a hot path) — opt in, refactor over time, ship faster handlers.
 
 ## Routing
 
@@ -245,7 +247,7 @@ Both are intentionally minimal. They configure CORS preflight and a default set 
 
 ## Templates and the Rust hot path
 
-The framework also accepts declarative template routes with no handler function:
+Declarative template routes have no handler function — the response shape is known at registration time:
 
 ```ts
 app.text("/plaintext", "Hello, World!");
@@ -253,7 +255,7 @@ app.json("/json", { message: "Hello, World!" });
 app.html("/welcome", "<h1>Welcome</h1>");
 ```
 
-Template routes can be served by the Rust core at 8M+ RPS pipelined because there is no JS function to call per request. Mix templates and handlers freely in the same app — handler routes automatically run on the Node/Bun side.
+These routes are served by the Rust core at 8M+ RPS pipelined because there is no JS function to call per request. Mix templates and handlers freely — handler routes automatically run on the Bun side; template routes stay in Rust.
 
 Template tokens interpolate request data:
 
@@ -261,7 +263,9 @@ Template tokens interpolate request data:
 app.json("/users/:id", { id: "{{ params.id }}" });
 ```
 
-Templates are the right tool for static content and benchmark-style endpoints. For real application logic — branching, validation, DB calls — use handlers.
+Use templates for: health checks, version endpoints, well-known paths, static API responses. Use handlers for: anything with branching, validation, IO, or business logic.
+
+> **Coming soon:** the [AOT compiler](./docs/superpowers/plans/2026-05-08-aot-strategy.md) lets pure handler functions compile to Rust at build time — no API change, just a perf win when your handlers fit the AOT subset.
 
 ## Examples
 
@@ -301,7 +305,11 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for what runs where.
 
 ## Performance
 
-Local rig (Mac M-series + OrbStack VM with 10 vCPU, `wrk` over Docker host network):
+Be honest with yourself about which path your endpoints take. The Rust core is fast; the Bun fallback is also fast (top of the JS-runtime tier); but they are not the same speed. The number that matters for your app is the one for the path your handlers actually run on.
+
+### Template routes (Rust core)
+
+`app.text` / `app.json` / `app.html`. Local rig: Mac M-series + OrbStack VM (10 vCPU), `wrk` over Docker host network.
 
 | Workload | Throughput |
 |---|---|
@@ -312,7 +320,30 @@ Local rig (Mac M-series + OrbStack VM with 10 vCPU, `wrk` over Docker host netwo
 
 For context, the older TFB Citrine baseline this repo tracked was ~2.78M req/s plaintext and ~1.36M req/s JSON on bare metal. Fearless meets and exceeds that on weaker hardware via OrbStack.
 
-See [`benchmark.json`](./benchmark.json) for raw data and [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the Rust/TypeScript split.
+### Handler routes (Bun)
+
+Function handlers run on Bun's native HTTP server. Realistic ranges based on Bun's published numbers:
+
+| Handler shape | Approximate throughput |
+|---|---|
+| Trivial (no IO, return literal) | 400k - 800k req/s |
+| With validation + business logic | 100k - 300k req/s |
+| With single DB query (Postgres pool) | 30k - 80k req/s |
+
+These are limited by Bun + your IO, not by Fearless. The AOT roadmap aims to lift trivial-shape handlers into the Rust column over time.
+
+See [`benchmark.json`](./benchmark.json) for raw data, [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the Rust/TypeScript split, and [`docs/superpowers/plans/2026-05-08-aot-strategy.md`](./docs/superpowers/plans/2026-05-08-aot-strategy.md) for how we plan to grow the Rust column.
+
+## Linting (optional)
+
+Fearless ships an [`oxlint`](https://oxc-project.github.io/) config (`.oxlintrc.json`) tuned to flag patterns that block the AOT compiler:
+
+```bash
+npm run lint        # report
+npm run lint:fix    # autofix what's safe
+```
+
+oxlint is Rust-based and runs in single-digit milliseconds across the codebase. The config is intentionally conservative (most rules are warnings, not errors) so it slots into existing projects without breaking the build. As your codebase matures, you can ratchet warnings to errors. See [`AGENTS.md`](./AGENTS.md) and the AOT strategy for which rules feed the AOT-readiness check.
 
 ## Development
 
@@ -320,8 +351,19 @@ See [`benchmark.json`](./benchmark.json) for raw data and [`ARCHITECTURE.md`](./
 npm install
 npm run build
 npm test
+npm run lint
 npm run bench:tfb
 ```
+
+For new contributors and AI agents working on this repo, see [`llm.txt`](./llm.txt) for an at-a-glance project map.
+
+## Roadmap
+
+- **Now:** functional handler API + Rust template hot path + Bun fallback.
+- **Next:** AOT compiler that lifts pure handler functions into the Rust core. See [`docs/superpowers/plans/2026-05-08-aot-strategy.md`](./docs/superpowers/plans/2026-05-08-aot-strategy.md) for the strategy and 4-week MVP plan.
+- **Later:** typed framework handles (`fearless.kv`, `fearless.sql`, `fearless.http`) so even handlers with IO can compile to Rust. `fearless analyze` CLI to score AOT-readiness per handler.
+
+The AOT effort is the differentiator vs Hono/Elysia/Fastify. Same TypeScript, more of it running natively over time.
 
 ## License & Contributing
 
