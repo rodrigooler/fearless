@@ -1,6 +1,10 @@
 import type ts from "typescript";
+import type { DiscoveredHandle } from "@fearless/aot-analyzer";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "OPTIONS" | "HEAD";
+
+/** Whether a generated handler is sync (returns into `out` directly) or async (returns Vec<u8>). */
+export type EmittedHandlerKind = "sync" | "async";
 
 /**
  * Inputs to the transpiler. The handler is the analyzed AST node; the route
@@ -12,6 +16,12 @@ export interface TranspileOptions {
   readonly path: string;
   /** Stable id used to name the generated Rust function (e.g. handler_42). */
   readonly id: string;
+  /**
+   * Handles discovered in the source file (from `@fearless/aot-analyzer`'s
+   * `discoverHandles`). Required for async handlers that reference a handle.
+   * Defaults to `[]` for backward compat with sync-only callers.
+   */
+  readonly discoveredHandles?: readonly DiscoveredHandle[];
 }
 
 /**
@@ -27,6 +37,14 @@ export interface TranspileResult {
   /** Echoed from input — caller uses these for dispatch. */
   readonly method: HttpMethod;
   readonly path: string;
+  /** Whether the generated function is sync or async. */
+  readonly kind: EmittedHandlerKind;
+  /**
+   * Statement key → SQL text. Empty for sync handlers. The build pipeline
+   * collects these across all async handlers and emits a single PHF map that
+   * each async handler looks statements up in by key.
+   */
+  readonly statements: ReadonlyMap<string, string>;
 }
 
 /**

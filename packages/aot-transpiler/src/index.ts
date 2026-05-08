@@ -3,6 +3,7 @@ import { HANDLER_PARAM_NAME } from "@fearless/aot-analyzer";
 import type { TranspileOptions, TranspileOutcome, TranspileResult, ResponseShape } from "./types.js";
 import { extractResponseShape } from "./emit/extract.js";
 import { emitResponseBody } from "./emit/rust.js";
+import { emitAsyncHandler } from "./emit/async-handler.js";
 
 export type {
   HttpMethod,
@@ -13,6 +14,7 @@ export type {
   ResponseShape,
   BodyChunk,
   ChunkFormat,
+  EmittedHandlerKind,
 } from "./types.js";
 
 /**
@@ -31,6 +33,38 @@ export type {
 export function transpileHandler(options: TranspileOptions): TranspileOutcome {
   const handler = options.handler;
   const fnName = `handler_${sanitizeId(options.id)}`;
+
+  // Async handlers (Phase 1.2+) take a different code path: they need to bind
+  // params, await the handle method, and build the response from row data.
+  if (isAsyncHandler(handler)) {
+    const asyncOut = emitAsyncHandler({
+      handler,
+      source: handler.getSourceFile(),
+      discoveredHandles: options.discoveredHandles ?? [],
+      handlerId: options.id,
+      method: options.method,
+      path: options.path,
+      tsApi: ts,
+    });
+    if (!asyncOut.success) {
+      return {
+        success: false,
+        error: {
+          kind: "unsupported-construct",
+          message: asyncOut.error ?? "async handler emit failed",
+        },
+      };
+    }
+    const result: TranspileResult = {
+      rustSource: asyncOut.rustSource!,
+      fnName: asyncOut.functionName!,
+      method: options.method,
+      path: options.path,
+      kind: "async",
+      statements: asyncOut.statements!,
+    };
+    return { success: true, result };
+  }
 
   const blocks = extractReturnBlocks(handler);
   if (blocks.length === 0) {
@@ -67,8 +101,19 @@ export function transpileHandler(options: TranspileOptions): TranspileOutcome {
     fnName,
     method: options.method,
     path: options.path,
+    kind: "sync",
+    statements: new Map(),
   };
   return { success: true, result };
+}
+
+/**
+ * Detect whether the handler is declared with `async`. Both `ArrowFunction`
+ * and `FunctionExpression` carry a `modifiers` array containing the async keyword.
+ */
+function isAsyncHandler(handler: ts.ArrowFunction | ts.FunctionExpression): boolean {
+  const mods = ts.canHaveModifiers(handler) ? ts.getModifiers(handler) : undefined;
+  return mods?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword) ?? false;
 }
 
 interface ReturnBlock {

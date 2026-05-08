@@ -41,26 +41,16 @@ pub async fn handle_db_random(pool: &Pool) -> Vec<u8> {
     // 3. Build JSON body manually (avoid serde overhead — this is the hot path).
     let mut body = Vec::with_capacity(40);
     body.extend_from_slice(b"{\"id\":");
-    write_i32(&mut body, row_id);
+    crate::aot::runtime::write_i32(&mut body, row_id);
     body.extend_from_slice(b",\"randomNumber\":");
-    write_i32(&mut body, random);
+    crate::aot::runtime::write_i32(&mut body, random);
     body.push(b'}');
 
     // 4. Build response with Content-Length.
     let mut resp = Vec::with_capacity(HTTP_PREFIX.len() + 16 + body.len());
     resp.extend_from_slice(HTTP_PREFIX);
-    write_usize(&mut resp, body.len());
+    crate::aot::runtime::write_usize(&mut resp, body.len());
     resp.extend_from_slice(b"\r\n\r\n");
     resp.extend_from_slice(&body);
     resp
-}
-
-fn write_i32(out: &mut Vec<u8>, n: i32) {
-    let mut buf = itoa::Buffer::new();
-    out.extend_from_slice(buf.format(n).as_bytes());
-}
-
-fn write_usize(out: &mut Vec<u8>, n: usize) {
-    let mut buf = itoa::Buffer::new();
-    out.extend_from_slice(buf.format(n).as_bytes());
 }

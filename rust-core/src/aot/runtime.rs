@@ -109,6 +109,50 @@ pub fn write_decimal(out: &mut Vec<u8>, mut value: usize) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Helpers used by Phase 1.2+ async generated handlers (`emit/async-handler.ts`).
+// ---------------------------------------------------------------------------
+
+/// Pre-formatted 404 response for use when a row lookup returns None.
+pub fn not_found_response() -> Vec<u8> {
+    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
+}
+
+/// Build a generic error response with the given status + body. Headers always
+/// include `Content-Length` and `Connection: close`. Used by generated async
+/// handlers when bind-param coercion fails (400) or the handle errors (503).
+pub fn error_response(status: u16, body: &[u8]) -> Vec<u8> {
+    let mut resp = Vec::with_capacity(body.len() + 80);
+    resp.extend_from_slice(b"HTTP/1.1 ");
+    write_u16(&mut resp, status);
+    resp.extend_from_slice(b" Error\r\nContent-Length: ");
+    write_usize(&mut resp, body.len());
+    resp.extend_from_slice(b"\r\nConnection: close\r\n\r\n");
+    resp.extend_from_slice(body);
+    resp
+}
+
+/// Append a signed 32-bit integer to `out` as ASCII digits.
+#[inline]
+pub fn write_i32(out: &mut Vec<u8>, n: i32) {
+    let mut buf = itoa::Buffer::new();
+    out.extend_from_slice(buf.format(n).as_bytes());
+}
+
+/// Append a usize to `out` as ASCII digits.
+#[inline]
+pub fn write_usize(out: &mut Vec<u8>, n: usize) {
+    let mut buf = itoa::Buffer::new();
+    out.extend_from_slice(buf.format(n).as_bytes());
+}
+
+/// Append an unsigned 16-bit integer to `out` as ASCII digits.
+#[inline]
+pub fn write_u16(out: &mut Vec<u8>, n: u16) {
+    let mut buf = itoa::Buffer::new();
+    out.extend_from_slice(buf.format(n).as_bytes());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
