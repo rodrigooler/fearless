@@ -20,7 +20,8 @@ export {
   ALLOWED_CTX_INPUTS,
 } from "./types.js";
 export { discoverHandles } from "./handles.js";
-export type { DiscoveredHandle, HandleKind } from "./handles.js";
+export type { DiscoveredHandle, HandleKind, HandleMethodCall, SqlTemplate, SqlBindParam } from "./handles.js";
+export { parseSqlTemplate } from "./sql-template.js";
 
 /**
  * The full set of Phase 0 rules. Order matters only for output stability —

@@ -20,8 +20,39 @@
  * so the transpiler knows what to compile.
  */
 import type ts from "typescript";
+import { parseSqlTemplate } from "./sql-template.js";
 
 export type HandleKind = "sql" | "kv" | "http";
+
+/** A `${...}` substitution inside a sql`...` template literal. */
+export interface SqlBindParam {
+  /** Source code of the substitution expression (e.g. "ctx.params.id"). */
+  readonly expression: string;
+  /** Position in the template (0-indexed across all substitutions). */
+  readonly index: number;
+}
+
+/** A parsed sql`...` template literal. */
+export interface SqlTemplate {
+  /** SQL text with `${...}` substitutions replaced by `$1, $2, ...` placeholders. */
+  readonly sqlText: string;
+  /** Bind params in order, matching the `$1, $2, ...` placeholders. */
+  readonly params: readonly SqlBindParam[];
+  /** Source position of the template literal. */
+  readonly start: number;
+  readonly end: number;
+}
+
+/** A single `await db.queryOne(sql\`...\`)` (or similar) call. */
+export interface HandleMethodCall {
+  /** Method name on the handle, e.g. "queryOne", "queryMany", "execute". */
+  readonly methodName: string;
+  /** The sql`...` template passed as the FIRST argument. */
+  readonly sqlTemplate: SqlTemplate;
+  /** Source position of the entire CallExpression. */
+  readonly start: number;
+  readonly end: number;
+}
 
 export interface DiscoveredHandle {
   /** Variable name the user bound the handle to (e.g. "db", "cache"). */
@@ -33,6 +64,8 @@ export interface DiscoveredHandle {
   /** Source position of the declaration. */
   readonly start: number;
   readonly end: number;
+  /** All method calls on this handle within the analyzed source. */
+  readonly methodCalls: readonly HandleMethodCall[];
 }
 
 /**
@@ -50,26 +83,66 @@ export function discoverHandles(
   sourceFile: ts.SourceFile,
   typescript: typeof ts
 ): DiscoveredHandle[] {
-  const out: DiscoveredHandle[] = [];
+  // Phase 1: collect handle declarations
+  const handlesByVar = new Map<string, {
+    variableName: string;
+    kind: HandleKind;
+    registeredName: string;
+    start: number;
+    end: number;
+    methodCalls: HandleMethodCall[];
+  }>();
 
-  const visit = (node: ts.Node): void => {
+  const visitDeclarations = (node: ts.Node): void => {
     if (typescript.isVariableDeclaration(node) && node.initializer != null) {
       const handle = matchFearlessHandle(node, typescript);
       if (handle != null) {
-        out.push(handle);
+        handlesByVar.set(handle.variableName, { ...handle, methodCalls: [] });
       }
     }
-    node.forEachChild(visit);
+    node.forEachChild(visitDeclarations);
   };
 
-  visit(sourceFile);
-  return out;
+  visitDeclarations(sourceFile);
+
+  // Phase 2: walk the file finding handle method calls
+  const visitCalls = (node: ts.Node): void => {
+    if (
+      typescript.isCallExpression(node) &&
+      typescript.isPropertyAccessExpression(node.expression)
+    ) {
+      const propAccess = node.expression;
+      if (typescript.isIdentifier(propAccess.expression)) {
+        const objName = propAccess.expression.text;
+        const handle = handlesByVar.get(objName);
+        if (handle != null) {
+          const firstArg = node.arguments[0];
+          if (firstArg != null && typescript.isTaggedTemplateExpression(firstArg)) {
+            const template = parseSqlTemplate(firstArg, sourceFile, typescript);
+            if (template != null) {
+              handle.methodCalls.push({
+                methodName: propAccess.name.text,
+                sqlTemplate: template,
+                start: node.getStart(sourceFile),
+                end: node.getEnd(),
+              });
+            }
+          }
+        }
+      }
+    }
+    typescript.forEachChild(node, visitCalls);
+  };
+
+  visitCalls(sourceFile);
+
+  return [...handlesByVar.values()];
 }
 
 function matchFearlessHandle(
   node: ts.VariableDeclaration,
   typescript: typeof ts
-): DiscoveredHandle | null {
+): Omit<DiscoveredHandle, "methodCalls"> | null {
   const init = node.initializer;
   if (init == null) return null;
 
