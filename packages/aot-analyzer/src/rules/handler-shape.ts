@@ -10,6 +10,20 @@ import { HANDLER_PARAM_NAME } from "../types.js";
 export const handlerShapeRule: Rule = ({ handler, typescript }) => {
   const reasons: Reason[] = [];
 
+  // `async` handlers return Promise<Response> — incompatible with the AOT runtime
+  // which expects a synchronous Response. Even with no `await` body, the async
+  // keyword changes the return type. Reject up front.
+  const modifiers = typescript.canHaveModifiers(handler) ? typescript.getModifiers(handler) : undefined;
+  if (modifiers != null && modifiers.some((m) => m.kind === typescript.SyntaxKind.AsyncKeyword)) {
+    reasons.push({
+      rule: "handler-shape",
+      message: "`async` handlers return Promise — not AOT-compilable",
+      start: handler.getStart(),
+      end: handler.getEnd(),
+      hint: "Drop the `async` keyword. If you need async work, the handler runs on Bun.",
+    });
+  }
+
   if (handler.parameters.length !== 1) {
     reasons.push({
       rule: "handler-shape",

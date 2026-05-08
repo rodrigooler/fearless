@@ -1,0 +1,271 @@
+import ts from "typescript";
+import { analyzeHandler, type AnalysisResult } from "@fearless/aot-analyzer";
+import { transpileHandler, type HttpMethod, type TranspileResult } from "@fearless/aot-transpiler";
+
+export interface CompileAppOptions {
+  /** Source code of the user's app entry file. */
+  readonly source: string;
+  /** Optional file name (for diagnostic positions). */
+  readonly fileName?: string;
+}
+
+/**
+ * One discovered route in the user's app. Either:
+ *   - `aot`: the handler passes the analyzer and is being transpiled to Rust.
+ *   - `bun`: the handler does not qualify; the runtime forwards to Bun.
+ *   - `template`: a declarative `app.text/json/html` registration; the rust-core
+ *     manifest format already handles these (legacy template path).
+ */
+export type DiscoveredRoute =
+  | {
+      readonly kind: "aot";
+      readonly method: HttpMethod;
+      readonly path: string;
+      readonly transpile: TranspileResult;
+    }
+  | {
+      readonly kind: "bun";
+      readonly method: HttpMethod;
+      readonly path: string;
+      readonly reason: AnalysisResult & { compilable: false };
+      /** The handler text — useful for the Bun-side runtime to evaluate. */
+      readonly handlerSource: string;
+    }
+  | {
+      readonly kind: "template";
+      readonly method: HttpMethod;
+      readonly path: string;
+      readonly responseSource: string;
+    };
+
+export interface CompileAppResult {
+  readonly routes: ReadonlyArray<DiscoveredRoute>;
+  /** Full Rust source for `aot_handlers.rs`. Empty string if no AOT routes. */
+  readonly rustSource: string;
+  /** Manifest fragment for the rust-core dispatcher. */
+  readonly dispatchManifest: ReadonlyArray<DispatchEntry>;
+  /** Diagnostic counts for the build script's summary output. */
+  readonly summary: {
+    readonly total: number;
+    readonly aot: number;
+    readonly bun: number;
+    readonly template: number;
+  };
+}
+
+export interface DispatchEntry {
+  readonly method: HttpMethod;
+  readonly path: string;
+  readonly kind: "aot" | "bun" | "template";
+  /** When kind === "aot", the generated Rust function name. */
+  readonly fnName?: string;
+}
+
+const HTTP_METHOD_NAMES: ReadonlyMap<string, HttpMethod> = new Map([
+  ["get", "GET"],
+  ["post", "POST"],
+  ["put", "PUT"],
+  ["delete", "DELETE"],
+  ["patch", "PATCH"],
+  ["options", "OPTIONS"],
+  ["head", "HEAD"],
+]);
+
+const TEMPLATE_METHOD_NAMES: ReadonlySet<string> = new Set(["text", "json", "html"]);
+
+export function compileApp(options: CompileAppOptions): CompileAppResult {
+  const sourceFile = ts.createSourceFile(
+    options.fileName ?? "<app>.ts",
+    options.source,
+    ts.ScriptTarget.ES2022,
+    /* setParentNodes */ true,
+    ts.ScriptKind.TS
+  );
+
+  const routes: DiscoveredRoute[] = [];
+  let aotIdCounter = 0;
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      if (ts.isPropertyAccessExpression(callee)) {
+        const methodName = callee.name.text;
+
+        // Handler routes (app.get, app.post, etc.) — handler is the second arg
+        const httpMethod = HTTP_METHOD_NAMES.get(methodName);
+        if (httpMethod != null && node.arguments.length >= 2) {
+          const pathArg = node.arguments[0];
+          const handlerArg = node.arguments[1];
+          if (
+            pathArg != null &&
+            (ts.isStringLiteral(pathArg) || ts.isNoSubstitutionTemplateLiteral(pathArg)) &&
+            handlerArg != null
+          ) {
+            const path = pathArg.text;
+            const route = discoverHandlerRoute(httpMethod, path, handlerArg, aotIdCounter);
+            routes.push(route);
+            if (route.kind === "aot") aotIdCounter += 1;
+            // Also distinguishes: handlerArg might be a RouteResponseSpec object literal
+            // for the legacy template API (app.get(path, { kind: "json", body: {...} })).
+            // That's not handled here — analyzer would reject it. Future: detect and route
+            // through the existing manifest-based template path.
+          }
+        }
+
+        // Template routes (app.text, app.json, app.html) — body is the second arg
+        if (TEMPLATE_METHOD_NAMES.has(methodName) && node.arguments.length >= 2) {
+          const pathArg = node.arguments[0];
+          const bodyArg = node.arguments[1];
+          if (
+            pathArg != null &&
+            (ts.isStringLiteral(pathArg) || ts.isNoSubstitutionTemplateLiteral(pathArg)) &&
+            bodyArg != null
+          ) {
+            routes.push({
+              kind: "template",
+              method: "GET",
+              path: pathArg.text,
+              responseSource: bodyArg.getText(sourceFile),
+            });
+          }
+        }
+      }
+    }
+    node.forEachChild(visit);
+  };
+  visit(sourceFile);
+
+  const rustChunks: string[] = [];
+  if (routes.some((r) => r.kind === "aot")) {
+    rustChunks.push(
+      "// Auto-generated by @fearless/aot-build. Do not edit — regenerated on every `fearless build`.",
+      "use crate::aot_runtime;",
+      ""
+    );
+    for (const route of routes) {
+      if (route.kind === "aot") {
+        rustChunks.push(route.transpile.rustSource);
+      }
+    }
+  }
+
+  const dispatchManifest: DispatchEntry[] = routes.map((route) => {
+    if (route.kind === "aot") {
+      return {
+        method: route.method,
+        path: route.path,
+        kind: "aot",
+        fnName: route.transpile.fnName,
+      };
+    }
+    return {
+      method: route.method,
+      path: route.path,
+      kind: route.kind,
+    };
+  });
+
+  const summary = {
+    total: routes.length,
+    aot: routes.filter((r) => r.kind === "aot").length,
+    bun: routes.filter((r) => r.kind === "bun").length,
+    template: routes.filter((r) => r.kind === "template").length,
+  };
+
+  return {
+    routes,
+    rustSource: rustChunks.join("\n"),
+    dispatchManifest,
+    summary,
+  };
+}
+
+function discoverHandlerRoute(
+  method: HttpMethod,
+  path: string,
+  handlerArg: ts.Expression,
+  idCounter: number
+): DiscoveredRoute {
+  // Only inline arrow functions / function expressions can be transpiled.
+  // References to a named function are out of scope (would need cross-file
+  // analysis). They fall back to Bun.
+  if (!ts.isArrowFunction(handlerArg) && !ts.isFunctionExpression(handlerArg)) {
+    return {
+      kind: "bun",
+      method,
+      path,
+      reason: {
+        compilable: false,
+        reasons: [
+          {
+            rule: "handler-shape",
+            message: "Handler is not an inline function — cross-file reference not supported in Phase 0.",
+          },
+        ],
+      },
+      handlerSource: handlerArg.getText(),
+    };
+  }
+
+  const analysis = analyzeHandler(handlerArg);
+  if (!analysis.compilable) {
+    return {
+      kind: "bun",
+      method,
+      path,
+      reason: analysis,
+      handlerSource: handlerArg.getText(),
+    };
+  }
+
+  const id = `${idCounter}_${path.replace(/[^a-zA-Z0-9]/g, "_")}`;
+  const outcome = transpileHandler({
+    handler: handlerArg,
+    method,
+    path,
+    id,
+  });
+  if (!outcome.success) {
+    return {
+      kind: "bun",
+      method,
+      path,
+      reason: {
+        compilable: false,
+        reasons: [
+          {
+            rule: "handler-shape",
+            message: `Transpiler failed: ${outcome.error.kind} — ${outcome.error.message}`,
+          },
+        ],
+      },
+      handlerSource: handlerArg.getText(),
+    };
+  }
+
+  return { kind: "aot", method, path, transpile: outcome.result };
+}
+
+/**
+ * Format a CompileAppResult as a human-readable build report — one line per route.
+ * Used by the `fearless build` CLI for at-a-glance feedback.
+ */
+export function formatBuildReport(result: CompileAppResult): string {
+  const lines: string[] = [];
+  lines.push(
+    `Discovered ${result.summary.total} routes: ${result.summary.aot} AOT, ${result.summary.bun} Bun-fallback, ${result.summary.template} template.`
+  );
+  for (const route of result.routes) {
+    const method = route.method.padEnd(6);
+    const path = route.path.padEnd(28);
+    if (route.kind === "aot") {
+      lines.push(`  ✅ ${method} ${path} → Rust (${route.transpile.fnName})`);
+    } else if (route.kind === "template") {
+      lines.push(`  📄 ${method} ${path} → template (Rust hot path)`);
+    } else {
+      const ruleNames = route.reason.reasons.map((r) => r.rule).join(", ");
+      lines.push(`  ⚠️  ${method} ${path} → Bun (blocked by: ${ruleNames})`);
+    }
+  }
+  return lines.join("\n");
+}
