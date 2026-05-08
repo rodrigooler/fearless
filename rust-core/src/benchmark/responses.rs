@@ -1,8 +1,9 @@
 use arc_swap::ArcSwap;
 use std::sync::Arc;
 
+use crate::benchmark::date::DATE_LEN;
+
 const SERVER: &str = "Fearless";
-const DATE_LEN: usize = 29;
 
 #[derive(Copy, Clone)]
 pub enum Variant {
@@ -94,4 +95,33 @@ fn render(status: &str, content_type: &str, body: &[u8], date: &[u8; DATE_LEN], 
     out.extend_from_slice(b"\r\n\r\n");
     out.extend_from_slice(body);
     out
+}
+
+use crate::benchmark::date::DateClock;
+
+pub struct BenchmarkServer {
+    pub responses: Arc<BenchmarkResponses>,
+    pub clock: Arc<DateClock>,
+}
+
+impl BenchmarkServer {
+    pub fn new() -> Self {
+        let clock = DateClock::start();
+        let responses = Arc::new(BenchmarkResponses::new());
+        responses.refresh(&clock.snapshot());
+        let refresher_clock = Arc::clone(&clock);
+        let refresher_responses = Arc::clone(&responses);
+        std::thread::Builder::new()
+            .name("fearless-resp-refresh".into())
+            .spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                refresher_responses.refresh(&refresher_clock.snapshot());
+            })
+            .expect("spawn refresher");
+        Self { responses, clock }
+    }
+}
+
+impl Default for BenchmarkServer {
+    fn default() -> Self { Self::new() }
 }
