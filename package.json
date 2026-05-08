@@ -27,6 +27,8 @@
     "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\" && tsc",
     "dev": "tsx watch examples/basic.ts",
     "start": "node dist/examples/basic.js",
+    "lint": "oxlint -c .oxlintrc.json src test",
+    "lint:fix": "oxlint -c .oxlintrc.json --fix src test",
     "bench:load": "tsx bench/load.ts",
     "bench:micro": "tsx bench/micro.ts",
     "test:js": "node --import tsx --test",
@@ -34,10 +36,10 @@
     "test": "npm run test:js && npm run test:rust",
     "bench:tfb": "node ./scripts/bench-tfb.mjs"
   },
-  "dependencies": {},
   "devDependencies": {
     "@types/node": "^22.0.0",
     "autocannon": "^8.0.0",
+    "oxlint": "^1.63.0",
     "tinybench": "^2.9.0",
     "tsx": "^4.0.0",
     "typescript": "^5.0.0"

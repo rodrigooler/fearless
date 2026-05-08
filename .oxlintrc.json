@@ -1,0 +1,49 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "ignorePatterns": [
+    "dist",
+    "node_modules",
+    "rust-core/target",
+    "examples/basic.ts"
+  ],
+  "categories": {
+    "correctness": "warn",
+    "perf": "warn",
+    "suspicious": "warn"
+  },
+  "rules": {
+    "no-explicit-any": "warn",
+    "prefer-const": "error",
+    "no-var": "error",
+    "no-eval": "error",
+    "no-implied-eval": "error",
+    "no-new-func": "error",
+    "no-with": "error",
+    "no-extend-native": "error",
+    "no-unsafe-finally": "error",
+    "no-unsafe-negation": "error",
+    "no-unsafe-optional-chaining": "error",
+    "no-unused-vars": ["warn", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }],
+    "eqeqeq": ["error", "smart"],
+    "no-self-compare": "error",
+    "no-template-curly-in-string": "warn",
+    "no-unmodified-loop-condition": "warn",
+    "no-useless-rename": "warn",
+    "no-useless-return": "warn",
+    "no-useless-concat": "warn",
+    "no-array-constructor": "warn",
+    "no-new-wrappers": "warn",
+    "no-floating-promises": "warn",
+    "require-await": "warn",
+    "no-useless-fallback-in-spread": "off"
+  },
+  "overrides": [
+    {
+      "files": ["test/**/*.ts", "examples/**/*.ts"],
+      "rules": {
+        "no-floating-promises": "off",
+        "no-explicit-any": "warn"
+      }
+    }
+  ]
+}
