@@ -25,8 +25,31 @@
       }
     }
   },
+  "localRun": {
+    "timestamp": "2026-05-08T01:30:00-03:00",
+    "host": "macOS M-series via OrbStack VM (Linux 6.19, 10 vCPU)",
+    "client": "wrk 4.1.0 in arm64 ubuntu container, host network, loopback",
+    "containerFlags": "--ulimit memlock=-1 --cap-add SYS_NICE --security-opt seccomp=unconfined -e FEARLESS_SQPOLL_MS=0",
+    "note": "Not bare-metal Citrine. OrbStack VM + Docker NAT + ARM emulation cap throughput well below what real Linux x86_64 would deliver. Numbers below are local-rig sanity, NOT TFB-equivalent.",
+    "summary": {
+      "plaintext": {
+        "nonPipelinedC256": 455169,
+        "pipeline16C256": 5713819,
+        "pipeline32C256": 8533881,
+        "pipeline16C512": 5213199
+      },
+      "json": {
+        "nonPipelinedC64": 406394
+      }
+    },
+    "comparisonToOldBaseline": {
+      "plaintextNonPipelined": "455k now vs 2.78M old (different rig — old was Citrine 28-core)",
+      "plaintextPipeline32": "8.53M on Mac OrbStack — exceeds old Citrine baseline 3x",
+      "tfbTop10Reference": "6-7M plaintext is current Top 10 floor on Citrine"
+    }
+  },
   "pendingRun": {
-    "note": "Top-10 push landed but TFB run not executed yet. Run on Linux per docs/superpowers/plans/2026-05-08-handoff-linux.md",
+    "note": "Real TFB run on Citrine still pending — see docs/superpowers/plans/2026-05-08-handoff-linux.md",
     "expectedNumbersTarget": {
       "plaintext": ">= 6000000",
       "json": ">= 3000000"
