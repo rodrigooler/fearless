@@ -348,6 +348,7 @@ dependencies = [
  "memchr",
  "mimalloc",
  "num_cpus",
+ "parking_lot",
  "rustc-hash",
  "serde",
  "serde_json",

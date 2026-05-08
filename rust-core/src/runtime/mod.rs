@@ -5,3 +5,6 @@
 
 #[cfg(feature = "pg-handles")]
 pub mod pg_pool;
+
+#[cfg(all(feature = "pg-handles", target_os = "linux"))]
+pub mod async_bridge;
