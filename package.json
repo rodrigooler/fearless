@@ -1,7 +1,7 @@
 {
   "name": "microu",
-  "version": "0.2.2",
-  "description": "Rust-first microframework with a small TypeScript surface and built-in helpers",
+  "version": "0.3.0",
+  "description": "TypeScript microframework with a hybrid Rust+Bun runtime. Functional handler API + lifecycle hooks. Declarative routes execute on a Rust core; handlers execute on Bun.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -23,6 +23,16 @@
       "import": "./dist/dependencies/security.js"
     }
   },
+  "files": [
+    "dist",
+    "rust-core/src",
+    "rust-core/Cargo.toml",
+    "rust-core/Cargo.lock",
+    "README.md",
+    "LICENSE",
+    "ARCHITECTURE.md",
+    "AGENTS.md"
+  ],
   "scripts": {
     "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\" && tsc",
     "dev": "tsx watch examples/basic.ts",
@@ -36,6 +46,32 @@
     "test": "npm run test:js && npm run test:rust",
     "bench:tfb": "node ./scripts/bench-tfb.mjs"
   },
+  "keywords": [
+    "microframework",
+    "framework",
+    "http",
+    "server",
+    "rust",
+    "bun",
+    "typescript",
+    "io_uring",
+    "performance",
+    "handler",
+    "routing",
+    "techempower",
+    "fastify-alternative",
+    "express-alternative"
+  ],
+  "author": "Rodrigo Oler",
+  "license": "MIT",
+  "homepage": "https://github.com/rodrigooler/fearless#readme",
+  "bugs": {
+    "url": "https://github.com/rodrigooler/fearless/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rodrigooler/fearless.git"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "autocannon": "^8.0.0",
@@ -45,10 +81,9 @@
     "typescript": "^5.0.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/rodrigooler/fearless.git"
+  "publishConfig": {
+    "access": "public"
   }
 }
