@@ -112,7 +112,11 @@ export function compileApp(options: CompileAppOptions): CompileAppResult {
           }
         }
 
-        // Template routes (app.text, app.json, app.html) — body is the second arg
+        // Template routes (app.text, app.json, app.html) — body is the second arg.
+        // We synthesize an equivalent inline handler `(ctx) => ctx.<method>(body)` and
+        // run it through the AOT pipeline. The transpiler's static-literal path turns
+        // it into a `&'static [u8]` response — identical performance to a template
+        // served by a hand-written Rust route.
         if (TEMPLATE_METHOD_NAMES.has(methodName) && node.arguments.length >= 2) {
           const pathArg = node.arguments[0];
           const bodyArg = node.arguments[1];
@@ -121,12 +125,23 @@ export function compileApp(options: CompileAppOptions): CompileAppResult {
             (ts.isStringLiteral(pathArg) || ts.isNoSubstitutionTemplateLiteral(pathArg)) &&
             bodyArg != null
           ) {
-            routes.push({
-              kind: "template",
-              method: "GET",
-              path: pathArg.text,
-              responseSource: bodyArg.getText(sourceFile),
-            });
+            const path = pathArg.text;
+            const bodySource = bodyArg.getText(sourceFile);
+            const synthetic = `(ctx) => ctx.${methodName}(${bodySource})`;
+            const aotRoute = synthesizeTemplateAsAot(synthetic, path, aotIdCounter);
+            if (aotRoute != null) {
+              routes.push(aotRoute);
+              aotIdCounter += 1;
+            } else {
+              // Fall back to kind: template (won't be served until a future runtime
+              // wires templates separately — for now logs as un-served).
+              routes.push({
+                kind: "template",
+                method: "GET",
+                path,
+                responseSource: bodySource,
+              });
+            }
           }
         }
       }
@@ -194,6 +209,46 @@ export function compileApp(options: CompileAppOptions): CompileAppResult {
     dispatchManifest,
     summary,
   };
+}
+
+/**
+ * Synthesize an inline handler from an `app.text/json/html(path, body)` call
+ * and run it through the AOT pipeline. Returns the discovered route, or null
+ * if the body isn't AOT-compatible (e.g. the user passed a complex expression
+ * that doesn't reduce to a static literal).
+ */
+function synthesizeTemplateAsAot(
+  syntheticSource: string,
+  path: string,
+  idCounter: number
+): DiscoveredRoute | null {
+  const wrapper = ts.createSourceFile(
+    "<template-synth>.ts",
+    `const __h = ${syntheticSource};`,
+    ts.ScriptTarget.ES2022,
+    true,
+    ts.ScriptKind.TS
+  );
+  let arrow: ts.ArrowFunction | null = null;
+  const visit = (node: ts.Node): void => {
+    if (arrow != null) return;
+    if (ts.isArrowFunction(node)) {
+      arrow = node;
+      return;
+    }
+    node.forEachChild(visit);
+  };
+  visit(wrapper);
+  if (arrow == null) return null;
+
+  const analysis = analyzeHandler(arrow);
+  if (!analysis.compilable) return null;
+
+  const id = `${idCounter}_template_${path.replace(/[^a-zA-Z0-9]/g, "_")}`;
+  const outcome = transpileHandler({ handler: arrow, method: "GET", path, id });
+  if (!outcome.success) return null;
+
+  return { kind: "aot", method: "GET", path, transpile: outcome.result };
 }
 
 function discoverHandlerRoute(

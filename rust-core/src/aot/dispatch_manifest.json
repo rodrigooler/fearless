@@ -2,42 +2,44 @@
   {
     "method": "GET",
     "path": "/healthz",
-    "kind": "template"
+    "kind": "aot",
+    "fnName": "handler_0_template__healthz"
   },
   {
     "method": "GET",
     "path": "/version",
-    "kind": "template"
+    "kind": "aot",
+    "fnName": "handler_1_template__version"
   },
   {
     "method": "GET",
     "path": "/echo-static",
     "kind": "aot",
-    "fnName": "handler_0__echo_static"
+    "fnName": "handler_2__echo_static"
   },
   {
     "method": "GET",
     "path": "/users/:id/exists",
     "kind": "aot",
-    "fnName": "handler_1__users__id_exists"
+    "fnName": "handler_3__users__id_exists"
   },
   {
     "method": "GET",
     "path": "/admin/area",
     "kind": "aot",
-    "fnName": "handler_2__admin_area"
+    "fnName": "handler_4__admin_area"
   },
   {
     "method": "GET",
     "path": "/greet/:name",
     "kind": "aot",
-    "fnName": "handler_3__greet__name"
+    "fnName": "handler_5__greet__name"
   },
   {
     "method": "GET",
     "path": "/created",
     "kind": "aot",
-    "fnName": "handler_4__created"
+    "fnName": "handler_6__created"
   },
   {
     "method": "GET",

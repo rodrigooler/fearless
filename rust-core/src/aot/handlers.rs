@@ -3,12 +3,22 @@
 use crate::aot::runtime as aot_runtime;
 use crate::aot::AotRouteTable;
 
-pub fn handler_0__echo_static(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
+pub fn handler_0_template__healthz(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
+    // static response — bytes computed at compile time
+    out.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok");
+}
+
+pub fn handler_1_template__version(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
+    // static response — bytes computed at compile time
+    out.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 39\r\nConnection: keep-alive\r\n\r\n{\"version\":\"1.0.0\",\"commit\":\"deadbeef\"}");
+}
+
+pub fn handler_2__echo_static(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
     // static response — bytes computed at compile time
     out.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 27\r\nConnection: keep-alive\r\n\r\n{\"ok\":true,\"kind\":\"static\"}");
 }
 
-pub fn handler_1__users__id_exists(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
+pub fn handler_3__users__id_exists(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
     // dynamic response — body length computed at runtime
     let mut body: Vec<u8> = Vec::with_capacity(64);
     body.extend_from_slice(b"{");
@@ -26,7 +36,7 @@ pub fn handler_1__users__id_exists(req: &aot_runtime::AotRequest, out: &mut Vec<
     out.extend_from_slice(&body);
 }
 
-pub fn handler_2__admin_area(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
+pub fn handler_4__admin_area(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
     if req.header("authorization") == "letmein" {
         // static response — bytes computed at compile time
         out.extend_from_slice(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 20\r\nConnection: keep-alive\r\n\r\n{\"access\":\"granted\"}");
@@ -36,7 +46,7 @@ pub fn handler_2__admin_area(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
     out.extend_from_slice(b"HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: 18\r\nConnection: keep-alive\r\n\r\n{\"error\":\"denied\"}");
 }
 
-pub fn handler_3__greet__name(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
+pub fn handler_5__greet__name(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
     // dynamic response — body length computed at runtime
     let mut body: Vec<u8> = Vec::with_capacity(64);
     body.extend_from_slice(b"Hello, ");
@@ -48,7 +58,7 @@ pub fn handler_3__greet__name(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) 
     out.extend_from_slice(&body);
 }
 
-pub fn handler_4__created(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
+pub fn handler_6__created(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
     // static response — bytes computed at compile time
     out.extend_from_slice(b"HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: 16\r\nConnection: keep-alive\r\n\r\n{\"created\":true}");
 }
@@ -56,9 +66,11 @@ pub fn handler_4__created(req: &aot_runtime::AotRequest, out: &mut Vec<u8>) {
 /// Register every AOT-compiled handler into the given route table.
 /// Called once at server startup; `table` is then shared (read-only) across all workers.
 pub fn register(table: &mut AotRouteTable) {
-    table.add("GET", "/echo-static", handler_0__echo_static);
-    table.add("GET", "/users/:id/exists", handler_1__users__id_exists);
-    table.add("GET", "/admin/area", handler_2__admin_area);
-    table.add("GET", "/greet/:name", handler_3__greet__name);
-    table.add("GET", "/created", handler_4__created);
+    table.add("GET", "/healthz", handler_0_template__healthz);
+    table.add("GET", "/version", handler_1_template__version);
+    table.add("GET", "/echo-static", handler_2__echo_static);
+    table.add("GET", "/users/:id/exists", handler_3__users__id_exists);
+    table.add("GET", "/admin/area", handler_4__admin_area);
+    table.add("GET", "/greet/:name", handler_5__greet__name);
+    table.add("GET", "/created", handler_6__created);
 }

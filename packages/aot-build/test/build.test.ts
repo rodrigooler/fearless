@@ -44,25 +44,28 @@ test("falls back to Bun for async handlers", () => {
   }
 });
 
-test("discovers template routes (app.text / app.json)", () => {
+test("template routes (app.text / app.json) are lifted into AOT pipeline", () => {
+  // app.text/json/html with a literal body get synthesized as `(ctx) => ctx.<m>(literal)`
+  // and pass through the transpiler. Result: same Rust performance as a hand-written AOT.
   const result = compile(`
     app.text("/plaintext", "Hello, World!");
     app.json("/json", { message: "Hello, World!" });
   `);
-  assert.equal(result.summary.template, 2);
-  assert.equal(result.summary.aot, 0);
+  assert.equal(result.summary.aot, 2);
+  assert.equal(result.summary.template, 0);
   assert.equal(result.summary.bun, 0);
 });
 
-test("mixed app — AOT + Bun + template", () => {
+test("mixed app — AOT (handlers + lifted templates) + Bun fallback", () => {
   const result = compile(`
     app.text("/healthz", "ok");
     app.get("/u/:id", (ctx) => ctx.json({ id: ctx.params.id }));
     app.post("/u", async (ctx) => { const b = await ctx.body(); return ctx.json(b); });
   `);
-  assert.equal(result.summary.aot, 1);
+  // /healthz template + /u/:id handler both AOT now. Only the async POST falls back.
+  assert.equal(result.summary.aot, 2);
   assert.equal(result.summary.bun, 1);
-  assert.equal(result.summary.template, 1);
+  assert.equal(result.summary.template, 0);
   assert.equal(result.summary.total, 3);
 });
 
@@ -98,27 +101,27 @@ test("rustSource includes header + use line + handler fn", () => {
   assert.match(result.rustSource, /table\.add\("GET", "\/u\/:id", handler_/);
 });
 
-test("rustSource is empty when no AOT routes", () => {
+test("rustSource is empty only when nothing AOT-eligible (incl. templates)", () => {
+  // Just the async handler — no template to lift either.
   const result = compile(`
-    app.text("/x", "hi");
     app.post("/y", async (ctx) => ctx.json(await ctx.body()));
   `);
   assert.equal(result.rustSource, "");
 });
 
-test("dispatch manifest entries match discovered routes", () => {
+test("dispatch manifest entries match discovered routes (templates lift to AOT)", () => {
   const result = compile(`
     app.get("/a", (ctx) => ctx.json({ a: 1 }));
     app.text("/b", "bee");
     app.post("/c", async (ctx) => ctx.json({}));
   `);
   assert.equal(result.dispatchManifest.length, 3);
-  const aot = result.dispatchManifest.find((d) => d.kind === "aot");
-  const tmpl = result.dispatchManifest.find((d) => d.kind === "template");
-  const bun = result.dispatchManifest.find((d) => d.kind === "bun");
-  assert.ok(aot && aot.fnName != null);
-  assert.equal(tmpl?.path, "/b");
-  assert.equal(bun?.path, "/c");
+  const aotEntries = result.dispatchManifest.filter((d) => d.kind === "aot");
+  const bunEntries = result.dispatchManifest.filter((d) => d.kind === "bun");
+  // /a (handler) + /b (lifted template) both AOT; /c is Bun.
+  assert.equal(aotEntries.length, 2);
+  assert.equal(bunEntries.length, 1);
+  assert.ok(aotEntries.every((e) => e.fnName != null));
 });
 
 test("AOT fnNames are unique across routes", () => {
@@ -146,7 +149,8 @@ test("formatBuildReport produces a one-line-per-route summary", () => {
   const report = formatBuildReport(result);
   assert.match(report, /Discovered 3 routes/);
   assert.match(report, /✅ GET .*\/a/);
-  assert.match(report, /📄 GET .*\/b/);
+  // /b lifts to AOT now (synthesized handler), so it shows ✅ not 📄.
+  assert.match(report, /✅ GET .*\/b/);
   assert.match(report, /⚠️.*POST .*\/c/);
 });
 
