@@ -84,6 +84,34 @@ fn build_reuseport_listener(
     socket.set_recv_buffer_size(1 << 20)?;
     socket.set_send_buffer_size(1 << 20)?;
 
+    // SO_BUSY_POLL: tell the kernel to spin-poll the NIC ring on packet receive
+    // for this socket up to N microseconds before yielding. Reduces wake-up latency
+    // when traffic is sustained; trades CPU for throughput. Opt-in via env so we
+    // don't burn CPU on idle deployments.
+    let busy_poll_us: u32 = std::env::var("FEARLESS_BUSY_POLL_US")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    if busy_poll_us > 0 {
+        let val: libc::c_int = busy_poll_us as libc::c_int;
+        let result = unsafe {
+            libc::setsockopt(
+                socket.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_BUSY_POLL,
+                &val as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            )
+        };
+        if result != 0 {
+            eprintln!(
+                "warn: SO_BUSY_POLL setsockopt failed for {} us: {}",
+                busy_poll_us,
+                io::Error::last_os_error()
+            );
+        }
+    }
+
     // SO_INCOMING_CPU: hint to the kernel that this socket prefers connections
     // arriving on this CPU. With SO_REUSEPORT, the kernel uses this hint to spread
     // accepts across the group. Best-effort — if libc rejects (older kernel), keep going.
