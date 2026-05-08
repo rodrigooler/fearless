@@ -15,18 +15,20 @@ pub fn run_loop(
 ) -> io::Result<()> {
     let mut conns: FxHashMap<u64, Connection> = FxHashMap::default();
     let mut next_token: u64 = 0;
+    // Reused across iterations so the completion drain is allocation-free in steady state.
+    let mut completions: Vec<(u64, i32)> = Vec::with_capacity(crate::uring::runtime::RING_ENTRIES as usize);
 
     submit_accept(ring, listener_fd)?;
 
     loop {
         ring.submit_and_wait(1)?;
-        // Drain the completion queue into a Vec so we can mutate `conns` while iterating.
-        let completions: Vec<(u64, i32)> = {
+        completions.clear();
+        {
             let cq = ring.completion();
-            cq.into_iter().map(|cqe| (cqe.user_data(), cqe.result())).collect()
-        };
+            completions.extend(cq.into_iter().map(|cqe| (cqe.user_data(), cqe.result())));
+        }
 
-        for (user_data, result) in completions {
+        for (user_data, result) in completions.drain(..) {
             if user_data == ACCEPT_TOKEN {
                 if result < 0 {
                     submit_accept(ring, listener_fd)?;

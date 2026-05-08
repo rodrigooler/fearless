@@ -7,7 +7,7 @@ use std::os::fd::{IntoRawFd, RawFd};
 use std::sync::Arc;
 use std::thread;
 
-const RING_ENTRIES: u32 = 4096;
+pub(crate) const RING_ENTRIES: u32 = 4096;
 
 pub fn run(port: u16, worker_count: usize) -> io::Result<()> {
     let cores = core_affinity::get_core_ids().unwrap_or_default();
