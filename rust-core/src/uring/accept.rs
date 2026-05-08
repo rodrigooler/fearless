@@ -16,7 +16,7 @@ pub fn run_loop(
     let mut conns: FxHashMap<u64, Connection> = FxHashMap::default();
     let mut next_token: u64 = 0;
     // Reused across iterations so the completion drain is allocation-free in steady state.
-    let mut completions: Vec<(u64, i32)> = Vec::with_capacity(crate::uring::runtime::RING_ENTRIES as usize);
+    let mut completions: Vec<(u64, i32, u32)> = Vec::with_capacity(crate::uring::runtime::RING_ENTRIES as usize);
 
     submit_accept(ring, listener_fd)?;
 
@@ -25,10 +25,10 @@ pub fn run_loop(
         completions.clear();
         {
             let cq = ring.completion();
-            completions.extend(cq.into_iter().map(|cqe| (cqe.user_data(), cqe.result())));
+            completions.extend(cq.into_iter().map(|cqe| (cqe.user_data(), cqe.result(), cqe.flags())));
         }
 
-        for (user_data, result) in completions.drain(..) {
+        for (user_data, result, flags) in completions.drain(..) {
             if user_data == ACCEPT_TOKEN {
                 if result < 0 {
                     submit_accept(ring, listener_fd)?;
@@ -40,7 +40,9 @@ pub fn run_loop(
                 let mut conn = Connection::new(client_fd, Arc::clone(&server));
                 conn.submit_read(ring, token)?;
                 conns.insert(token, conn);
-                submit_accept(ring, listener_fd)?;
+                if !io_uring::cqueue::more(flags) {
+                    submit_accept(ring, listener_fd)?;
+                }
                 continue;
             }
 
@@ -54,7 +56,7 @@ pub fn run_loop(
 }
 
 fn submit_accept(ring: &mut IoUring, listener_fd: RawFd) -> io::Result<()> {
-    let entry = opcode::Accept::new(Fd(listener_fd), std::ptr::null_mut(), std::ptr::null_mut())
+    let entry = opcode::AcceptMulti::new(Fd(listener_fd))
         .build()
         .user_data(ACCEPT_TOKEN);
     unsafe { ring.submission().push(&entry).map_err(|_| io::Error::other("sq full"))? };
