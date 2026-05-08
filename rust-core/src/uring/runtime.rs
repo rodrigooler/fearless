@@ -10,8 +10,22 @@ use std::thread;
 pub(crate) const RING_ENTRIES: u32 = 4096;
 
 pub fn run(port: u16, worker_count: usize) -> io::Result<()> {
+    run_with_aot(port, worker_count, None)
+}
+
+/// Same as `run`, but with an optional pre-built AOT route table attached to the server.
+/// Used when `aot-handlers` feature is on and the user has registered AOT routes.
+pub fn run_with_aot(
+    port: u16,
+    worker_count: usize,
+    aot_table: Option<Arc<crate::aot::AotRouteTable>>,
+) -> io::Result<()> {
     let cores = core_affinity::get_core_ids().unwrap_or_default();
-    let server = Arc::new(BenchmarkServer::new());
+    let mut server_builder = BenchmarkServer::new();
+    if let Some(table) = aot_table {
+        server_builder = server_builder.with_aot_table(table);
+    }
+    let server = Arc::new(server_builder);
 
     let mut handles = Vec::with_capacity(worker_count);
     for i in 0..worker_count {

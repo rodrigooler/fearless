@@ -281,16 +281,16 @@ impl Connection {
         let (method, path) = parse_method_path(request_bytes)?;
         let (handler, params) = table.lookup(method, path)?;
 
-        // Convert FxHashMap → std::HashMap for the runtime contract.
-        // (The contract uses std::HashMap so generated code doesn't need to know about FxHashMap.)
         let std_params: HashMap<String, String> = params.into_iter().collect();
-        let empty: HashMap<String, String> = HashMap::new();
 
         // Strip query string from path for AotRequest.path. Keep ctx.url with query.
-        let (clean_path, _query_str) = match path.find('?') {
+        let (clean_path, query_str) = match path.find('?') {
             Some(q) => (&path[..q], &path[q + 1..]),
             None => (path, ""),
         };
+
+        let query = parse_query_string(query_str);
+        let headers = parse_headers(request_bytes);
 
         let req = AotRequest {
             method,
@@ -298,8 +298,8 @@ impl Connection {
             url: path,
             ip: "",
             params: &std_params,
-            query: &empty,
-            headers: &empty,
+            query: &query,
+            headers: &headers,
         };
 
         scratch.clear();
@@ -337,15 +337,72 @@ fn parse_method_path(request_bytes: &[u8]) -> Option<(&str, &str)> {
     Some((method, path))
 }
 
-#[allow(dead_code)]
-fn _aot_table_compile_check(t: &crate::aot::AotRouteTable) -> Option<&str> {
-    let _ = t;
-    None
+/// Parse HTTP headers from a raw request, into a `key → value` map.
+/// Header keys are lowercased so `req.header("authorization")` matches
+/// `Authorization: ...` on the wire. Values are trimmed.
+///
+/// Returns an empty map if the request line / header section can't be parsed.
+/// Cost: O(n) over the request bytes — acceptable for AOT routes (which run
+/// at ~1M req/s typically, not the 10M of the benchmark fast path).
+fn parse_headers(request_bytes: &[u8]) -> HashMap<String, String> {
+    let mut headers = HashMap::new();
+    // Skip the request line (everything up to first \r\n)
+    let after_line = match memchr::memchr(b'\n', request_bytes) {
+        Some(pos) => &request_bytes[pos + 1..],
+        None => return headers,
+    };
+
+    let mut cursor = after_line;
+    loop {
+        // End of headers — empty line (\r\n on its own)
+        if cursor.starts_with(b"\r\n") || cursor.is_empty() {
+            break;
+        }
+        let line_end = match memchr::memchr(b'\n', cursor) {
+            Some(pos) => pos,
+            None => break,
+        };
+        let line = &cursor[..line_end];
+        // Strip trailing \r
+        let line = if !line.is_empty() && line[line.len() - 1] == b'\r' {
+            &line[..line.len() - 1]
+        } else {
+            line
+        };
+        if let Some(colon) = memchr::memchr(b':', line) {
+            let key = &line[..colon];
+            let value = &line[colon + 1..];
+            // Trim leading space on value
+            let value = value.strip_prefix(b" ").unwrap_or(value);
+            if let (Ok(k), Ok(v)) = (std::str::from_utf8(key), std::str::from_utf8(value)) {
+                headers.insert(k.to_ascii_lowercase(), v.to_string());
+            }
+        }
+        cursor = &cursor[line_end + 1..];
+    }
+    headers
 }
 
-// Suppress the "unused import" warning for FxHashMap when only used via
-// the param map type alias inside try_aot_dispatch. Compiler should be smart
-// enough but leave this for safety on stricter check passes.
+/// Parse a query string `foo=bar&baz=qux` into a `key → value` map.
+/// Returns an empty map for empty input. URL-decoding is NOT performed in this
+/// Phase 0 implementation — values are taken literally. Add it later if needed.
+fn parse_query_string(query: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    if query.is_empty() {
+        return out;
+    }
+    for pair in query.split('&') {
+        if let Some(eq) = pair.find('=') {
+            let key = &pair[..eq];
+            let value = &pair[eq + 1..];
+            out.insert(key.to_string(), value.to_string());
+        } else {
+            out.insert(pair.to_string(), String::new());
+        }
+    }
+    out
+}
+
 #[allow(dead_code)]
 fn _fx_hashmap_anchor() -> Option<FxHashMap<String, String>> {
     None

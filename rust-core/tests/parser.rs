@@ -3,13 +3,19 @@ use fearless_core::benchmark::parser::{classify, parse_pipeline, Classification,
 #[test]
 fn classifies_plaintext_keepalive() {
     let line = b"GET /plaintext HTTP/1.1\r\n";
-    assert_eq!(classify(line), Classification { route: Route::Plaintext, close: false });
+    assert_eq!(
+        classify(line),
+        Classification { route: Route::Plaintext, close: false, request_len: 0 }
+    );
 }
 
 #[test]
 fn classifies_json_close() {
     let line = b"GET /json HTTP/1.0\r\n";
-    assert_eq!(classify(line), Classification { route: Route::Json, close: true });
+    assert_eq!(
+        classify(line),
+        Classification { route: Route::Json, close: true, request_len: 0 }
+    );
 }
 
 #[test]
@@ -35,7 +41,7 @@ fn parses_three_pipelined_plaintext() {
     let buf = b"GET /plaintext HTTP/1.1\r\nHost: a\r\n\r\n\
                 GET /plaintext HTTP/1.1\r\nHost: a\r\n\r\n\
                 GET /plaintext HTTP/1.1\r\nHost: a\r\n\r\n";
-    let mut out = [Classification { route: Route::NotFound, close: false }; 8];
+    let mut out = [Classification { route: Route::NotFound, close: false, request_len: 0 }; 8];
     let result = parse_pipeline(buf, &mut out);
     assert_eq!(result.count, 3);
     assert_eq!(result.consumed, buf.len());
@@ -48,7 +54,7 @@ fn parses_three_pipelined_plaintext() {
 #[test]
 fn keeps_partial_trailing_request() {
     let mut buf = b"GET /plaintext HTTP/1.1\r\nHost: a\r\n\r\nGET /pla".to_vec();
-    let mut out = [Classification { route: Route::NotFound, close: false }; 4];
+    let mut out = [Classification { route: Route::NotFound, close: false, request_len: 0 }; 4];
     let result = parse_pipeline(&buf, &mut out);
     assert_eq!(result.count, 1);
     assert!(result.consumed < buf.len());

@@ -3,31 +3,34 @@
  * `fearless build` — orchestrates the AOT pipeline.
  *
  * Usage:
- *   node scripts/fearless-build.mjs <app-source.ts> [--out-dir rust-core/src/aot]
+ *   node scripts/fearless-build.mjs <app-source.ts> [--no-cargo] [--rust-core <dir>]
  *
  * Steps:
  *   1. Read user app source.
  *   2. Run @fearless/aot-build to discover routes + transpile AOT-eligible handlers.
- *   3. Write `aot_handlers.rs` to the output directory.
- *   4. Write `dispatch_manifest.json` describing which routes go where.
- *   5. Print a build report (per-route AOT/Bun/template breakdown).
+ *   3. Write `rust-core/src/aot/handlers.rs` (overwriting the placeholder).
+ *   4. Write `rust-core/src/aot/dispatch_manifest.json` (gitignored — diagnostic only).
+ *   5. Run `cargo build --release --features io-uring,aot-handlers` (skip with --no-cargo).
+ *   6. Print a build report.
  *
- * The output is consumed by:
- *   - `rust-core` build: `aot_handlers.rs` is included in the binary.
- *   - `rust-core` runtime: `dispatch_manifest.json` tells the dispatcher which
- *     route hits Rust vs forwards to Bun.
- *   - The Bun-side fallback runtime: which routes it must serve.
+ * After this, run the binary:
+ *   ./rust-core/target/release/fearless-core --port 8080
+ * AOT routes are dispatched in Rust; everything else falls back to baked 404
+ * (Bun fallback runtime is a separate sprint — see Step 5 of integration plan).
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { readFileSync, writeFileSync, existsSync, copyFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { compileApp, formatBuildReport } from "@fearless/aot-build";
 
 function parseArgs(argv) {
-  const args = { input: null, outDir: "rust-core/src/aot" };
+  const args = { input: null, runCargo: true, rustCore: "rust-core" };
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--out-dir") {
-      args.outDir = argv[++i];
+    if (arg === "--no-cargo") {
+      args.runCargo = false;
+    } else if (arg === "--rust-core") {
+      args.rustCore = argv[++i];
     } else if (!args.input) {
       args.input = arg;
     }
@@ -38,7 +41,7 @@ function parseArgs(argv) {
 function main() {
   const args = parseArgs(process.argv);
   if (args.input == null) {
-    console.error("usage: fearless-build <app-source.ts> [--out-dir <dir>]");
+    console.error("usage: fearless-build <app-source.ts> [--no-cargo] [--rust-core <dir>]");
     process.exit(1);
   }
 
@@ -51,27 +54,69 @@ function main() {
   const source = readFileSync(inputPath, "utf8");
   const result = compileApp({ source, fileName: inputPath });
 
-  const outDir = resolve(args.outDir);
-  mkdirSync(outDir, { recursive: true });
+  const aotDir = resolve(args.rustCore, "src/aot");
+  if (!existsSync(aotDir)) {
+    console.error(`error: rust-core/src/aot not found at ${aotDir}`);
+    console.error("(did you forget --rust-core <path>?)");
+    process.exit(1);
+  }
 
-  const rustPath = resolve(outDir, "aot_handlers.rs");
-  writeFileSync(rustPath, result.rustSource);
+  const handlersPath = resolve(aotDir, "handlers.rs");
+  const manifestPath = resolve(aotDir, "dispatch_manifest.json");
 
-  const manifestPath = resolve(outDir, "dispatch_manifest.json");
+  if (result.summary.aot === 0) {
+    // Restore the placeholder handlers.rs so the aot-handlers feature still
+    // compiles cleanly with no user routes. Empty mod.
+    writeFileSync(
+      handlersPath,
+      "//! Placeholder — `fearless build` did not find any AOT-eligible handlers.\n" +
+        "//! When you add an inline arrow handler that passes the analyzer, this file\n" +
+        "//! will contain real generated functions.\n\n" +
+        "#[allow(unused_imports)]\nuse crate::aot::runtime;\n\n" +
+        "/// Empty register — no routes to add.\n" +
+        "pub fn register(_table: &mut crate::aot::AotRouteTable) {}\n"
+    );
+  } else {
+    writeFileSync(handlersPath, result.rustSource);
+  }
   writeFileSync(manifestPath, JSON.stringify(result.dispatchManifest, null, 2));
 
   console.log(formatBuildReport(result));
   console.log("");
-  console.log(`Wrote: ${rustPath}`);
+  console.log(`Wrote: ${handlersPath}`);
   console.log(`Wrote: ${manifestPath}`);
 
-  if (result.summary.aot === 0) {
-    console.log("\nNo AOT-eligible handlers — rust-core will be built without an aot_handlers.rs body.");
-  } else {
-    console.log(
-      `\nNext: rebuild rust-core (\`cargo build --release --manifest-path rust-core/Cargo.toml --features io-uring\`).`
-    );
+  if (!args.runCargo) {
+    console.log("\nSkipped cargo build (--no-cargo).");
+    return;
   }
+
+  if (result.summary.aot === 0) {
+    console.log("\nNo AOT routes — skipping cargo build.");
+    return;
+  }
+
+  console.log("\nRunning cargo build with --features io-uring,aot-handlers ...");
+  const cargoResult = spawnSync(
+    "cargo",
+    [
+      "build",
+      "--release",
+      "--features",
+      "io-uring,aot-handlers",
+      "--manifest-path",
+      `${args.rustCore}/Cargo.toml`,
+    ],
+    { stdio: "inherit" }
+  );
+
+  if (cargoResult.status !== 0) {
+    console.error(`\ncargo build failed with status ${cargoResult.status}`);
+    process.exit(cargoResult.status ?? 1);
+  }
+
+  console.log("\nBuild complete. Binary at:");
+  console.log(`  ${resolve(args.rustCore, "target/release/fearless-core")}`);
 }
 
 main();

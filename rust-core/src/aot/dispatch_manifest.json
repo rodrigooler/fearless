@@ -1,0 +1,62 @@
+[
+  {
+    "method": "GET",
+    "path": "/healthz",
+    "kind": "template"
+  },
+  {
+    "method": "GET",
+    "path": "/version",
+    "kind": "template"
+  },
+  {
+    "method": "GET",
+    "path": "/echo-static",
+    "kind": "aot",
+    "fnName": "handler_0__echo_static"
+  },
+  {
+    "method": "GET",
+    "path": "/users/:id/exists",
+    "kind": "aot",
+    "fnName": "handler_1__users__id_exists"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/area",
+    "kind": "aot",
+    "fnName": "handler_2__admin_area"
+  },
+  {
+    "method": "GET",
+    "path": "/greet/:name",
+    "kind": "aot",
+    "fnName": "handler_3__greet__name"
+  },
+  {
+    "method": "GET",
+    "path": "/created",
+    "kind": "aot",
+    "fnName": "handler_4__created"
+  },
+  {
+    "method": "GET",
+    "path": "/async-trivial",
+    "kind": "bun"
+  },
+  {
+    "method": "POST",
+    "path": "/upload",
+    "kind": "bun"
+  },
+  {
+    "method": "GET",
+    "path": "/users-by-name",
+    "kind": "bun"
+  },
+  {
+    "method": "GET",
+    "path": "/parsed/:n",
+    "kind": "bun"
+  }
+]

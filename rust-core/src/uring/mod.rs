@@ -6,3 +6,4 @@ pub mod connection;
 pub mod runtime;
 
 pub use runtime::run as run_io_uring;
+pub use runtime::run_with_aot;

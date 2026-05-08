@@ -354,6 +354,16 @@ pub fn run_benchmark_server(port: u16) -> io::Result<()> {
 
     #[cfg(all(target_os = "linux", feature = "io-uring"))]
     {
+        // When `aot-handlers` is on, the generated handlers.rs declares a
+        // `register(table)` function. Build the table once at startup and
+        // pass it to the runtime — workers share the same Arc<AotRouteTable>.
+        #[cfg(feature = "aot-handlers")]
+        {
+            let mut table = aot::AotRouteTable::new();
+            aot::handlers::register(&mut table);
+            return uring::run_with_aot(port, worker_count, Some(Arc::new(table)));
+        }
+        #[cfg(not(feature = "aot-handlers"))]
         return uring::run_io_uring(port, worker_count);
     }
 
