@@ -10,10 +10,16 @@ import { createServer as createHttpsServer } from "node:https";
 import { Request } from "./request.js";
 import { Response } from "./response.js";
 import { normalizePath } from "./path.js";
+import { RequestContext } from "./ctx.js";
+import { HookChain } from "./middleware.js";
 import type {
   AppOptions,
   BuiltinFeature,
+  Handler,
   HttpMethod,
+  RequestHook,
+  ResponseHook,
+  ErrorHook,
   RouteOptions,
   RouteResponseSpec,
   TemplateValue,
@@ -32,11 +38,19 @@ interface CompiledPath {
   hasParams: boolean;
 }
 
-interface RouteDefinition {
-  method: HttpMethod;
-  compiledPath: CompiledPath;
-  response: RouteResponseSpec;
-}
+type RouteDefinition =
+  | {
+      kind: "template";
+      method: HttpMethod;
+      compiledPath: CompiledPath;
+      response: RouteResponseSpec;
+    }
+  | {
+      kind: "handler";
+      method: HttpMethod;
+      compiledPath: CompiledPath;
+      handler: Handler;
+    };
 
 interface RouteMatch {
   route: RouteDefinition;
@@ -214,6 +228,10 @@ function headersContainTemplate(headers?: Record<string, string>): boolean {
 }
 
 function routeCanUseStaticBunResponse(route: RouteDefinition): boolean {
+  // Handler routes always take the dynamic Bun fallback path.
+  if (route.kind !== "template") {
+    return false;
+  }
   // Static routes without params and without template tokens can be cached
   if (route.compiledPath.hasParams) {
     return false;
@@ -396,6 +414,7 @@ export class App {
   private builtinHeadersCache: Record<string, string> | null = null;
   private bunNotFoundResponse: globalThis.Response | null = null;
   private bunOptionsResponse: globalThis.Response | null = null;
+  private hooks = new HookChain();
   private config: Required<AppOptions> = {
     keyFileName: "",
     certFileName: "",
@@ -486,9 +505,20 @@ export class App {
     };
 
     return this.addRoute({
+      kind: "template",
       method,
       compiledPath,
       response: routeResponse,
+    });
+  }
+
+  private registerHandlerRoute(method: HttpMethod, path: string, handler: Handler): this {
+    const compiledPath = compilePath(path);
+    return this.addRoute({
+      kind: "handler",
+      method,
+      compiledPath,
+      handler,
     });
   }
 
@@ -662,7 +692,7 @@ export class App {
     return headers;
   }
 
-  private buildRouteHeaders(route: RouteDefinition): Record<string, string> {
+  private buildRouteHeaders(route: RouteDefinition & { kind: "template" }): Record<string, string> {
     const baseHeaders = this.buildBuiltinHeaders();
     const routeHeaders = route.response.headers;
     const hasRouteHeaders = routeHeaders && Object.keys(routeHeaders).length > 0;
@@ -681,7 +711,7 @@ export class App {
     return baseHeaders;
   }
 
-  private createStaticBunResponse(route: RouteDefinition): globalThis.Response {
+  private createStaticBunResponse(route: RouteDefinition & { kind: "template" }): globalThis.Response {
     const headers = this.buildRouteHeaders(route);
     const status = route.response.status ?? 200;
     const body = renderRouteBody(route.response, EMPTY_TEMPLATE_CONTEXT);
@@ -693,7 +723,7 @@ export class App {
   }
 
   private createBunResponse(
-    route: RouteDefinition,
+    route: RouteDefinition & { kind: "template" },
     method: HttpMethod,
     path: string,
     params: Record<string, string>,
@@ -717,7 +747,7 @@ export class App {
     });
   }
 
-  private createBunRouteHandler(route: RouteDefinition): BunRouteMethodHandler {
+  private createBunRouteHandler(route: RouteDefinition & { kind: "template" }): BunRouteMethodHandler {
     if (routeCanUseStaticBunResponse(route)) {
       return this.createStaticBunResponse(route);
     }
@@ -743,6 +773,11 @@ export class App {
     const routes: BunRouteMap = {};
 
     for (const route of this.routes) {
+      // Handler routes can't be pre-built; they fall through to handleBunFallback.
+      if (route.kind !== "template") {
+        continue;
+      }
+
       if (this.builtin.cors && route.method === "OPTIONS") {
         continue;
       }
@@ -776,7 +811,7 @@ export class App {
     return this.bunOptionsResponse;
   }
 
-  private handleBunFallback(request: BunRuntimeRequest, server: BunServerLike): globalThis.Response {
+  private async handleBunFallback(request: BunRuntimeRequest, server: BunServerLike): Promise<globalThis.Response> {
     const method = (request.method || "GET").toUpperCase() as HttpMethod;
 
     if (this.builtin.cors && method === "OPTIONS") {
@@ -789,6 +824,13 @@ export class App {
       return this.createBunNotFoundResponse();
     }
 
+    if (routeMatch.route.kind === "handler") {
+      const ip = normalizeIp(server.requestIP?.(request)?.address);
+      const ctx = RequestContext.fromWeb(request, routeMatch.params, ip);
+      const response = await this.hooks.execute(ctx, routeMatch.route.handler);
+      return this.applyBuiltinsToWebResponse(response);
+    }
+
     return this.createBunResponse(
       routeMatch.route,
       method,
@@ -798,6 +840,21 @@ export class App {
       toHeaderRecord(request.headers),
       normalizeIp(server.requestIP?.(request)?.address)
     );
+  }
+
+  private applyBuiltinsToWebResponse(response: globalThis.Response): globalThis.Response {
+    const builtin = this.buildBuiltinHeaders();
+    if (Object.keys(builtin).length === 0) return response;
+
+    const merged = new globalThis.Headers(response.headers);
+    for (const key of Object.keys(builtin)) {
+      if (!merged.has(key)) merged.set(key, builtin[key]);
+    }
+    return new globalThis.Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: merged,
+    });
   }
 
   private startBunServer(callback?: (started: boolean) => void): void {
@@ -883,6 +940,14 @@ export class App {
     }
 
     const routeMatch = this.findRoute(method, nodeReq.url || "/");
+
+    if (routeMatch && routeMatch.route.kind === "handler") {
+      const ctx = RequestContext.fromNode(nodeReq, nodeRes, routeMatch.params);
+      const webResponse = await this.hooks.execute(ctx, routeMatch.route.handler);
+      await this.writeWebResponseToNode(nodeRes, webResponse);
+      return;
+    }
+
     const request = new Request(nodeReq, routeMatch?.params ?? {});
     const response = new Response(nodeRes, routeMatch?.suppressBody ?? false);
 
@@ -896,6 +961,32 @@ export class App {
     response.status(404).end("Not Found");
   }
 
+  private async writeWebResponseToNode(nodeRes: ServerResponse, response: globalThis.Response): Promise<void> {
+    if (nodeRes.headersSent) {
+      nodeRes.end();
+      return;
+    }
+
+    // Apply builtins first; route-specific headers from Response take precedence.
+    const builtin = this.buildBuiltinHeaders();
+    for (const key of Object.keys(builtin)) {
+      nodeRes.setHeader(key, builtin[key]);
+    }
+    response.headers.forEach((value, key) => {
+      nodeRes.setHeader(key, value);
+    });
+
+    nodeRes.statusCode = response.status;
+
+    if (response.body === null) {
+      nodeRes.end();
+      return;
+    }
+
+    const buf = Buffer.from(await response.arrayBuffer());
+    nodeRes.end(buf);
+  }
+
   private applyBuiltins(response: Response): void {
     const headers = this.buildBuiltinHeaders();
     for (const key of Object.keys(headers)) {
@@ -904,6 +995,11 @@ export class App {
   }
 
   private writeRouteResponse(request: Request, response: Response, routeMatch: RouteMatch): void {
+    const route = routeMatch.route;
+    if (route.kind !== "template") {
+      throw new Error("internal: handler route reached template path");
+    }
+
     const templateContext: TemplateContext = {
       method: request.method,
       path: request.path,
@@ -913,9 +1009,9 @@ export class App {
       ip: request.ip,
     };
 
-    const body = renderRouteBody(routeMatch.route.response, templateContext);
-    const status = routeMatch.route.response.status ?? 200;
-    const headers = routeMatch.route.response.headers ?? {};
+    const body = renderRouteBody(route.response, templateContext);
+    const status = route.response.status ?? 200;
+    const headers = route.response.headers ?? {};
 
     response.status(status);
     response.setHeaders(headers);
@@ -925,13 +1021,13 @@ export class App {
       return;
     }
 
-    if (routeMatch.route.response.kind === "json") {
+    if (route.response.kind === "json") {
       response.setHeader("Content-Type", "application/json");
       response.end(body);
       return;
     }
 
-    response.setHeader("Content-Type", routeMatch.route.response.kind === "html" ? "text/html" : "text/plain");
+    response.setHeader("Content-Type", route.response.kind === "html" ? "text/html" : "text/plain");
     response.end(body);
   }
 
@@ -939,6 +1035,11 @@ export class App {
     const routes: RustStaticRoute[] = [];
 
     for (const route of this.routes) {
+      // Defensive: handler routes should never reach the Rust manifest.
+      // The dispatcher in listen() must redirect handler-bearing apps to
+      // Bun/Node before this point.
+      if (route.kind !== "template") continue;
+
       routes.push({
         method: route.method,
         path: route.compiledPath.normalized,
@@ -959,32 +1060,82 @@ export class App {
     };
   }
 
-  get(path: string, response: RouteResponseSpec, options?: RouteOptions): this {
-    return this.registerRoute("GET", path, response, options);
+  get(path: string, handler: Handler): this;
+  get(path: string, response: RouteResponseSpec, options?: RouteOptions): this;
+  get(path: string, responseOrHandler: RouteResponseSpec | Handler, options?: RouteOptions): this {
+    if (typeof responseOrHandler === "function") {
+      return this.registerHandlerRoute("GET", path, responseOrHandler);
+    }
+    return this.registerRoute("GET", path, responseOrHandler, options);
   }
 
-  post(path: string, response: RouteResponseSpec, options?: RouteOptions): this {
-    return this.registerRoute("POST", path, response, options);
+  post(path: string, handler: Handler): this;
+  post(path: string, response: RouteResponseSpec, options?: RouteOptions): this;
+  post(path: string, responseOrHandler: RouteResponseSpec | Handler, options?: RouteOptions): this {
+    if (typeof responseOrHandler === "function") {
+      return this.registerHandlerRoute("POST", path, responseOrHandler);
+    }
+    return this.registerRoute("POST", path, responseOrHandler, options);
   }
 
-  put(path: string, response: RouteResponseSpec, options?: RouteOptions): this {
-    return this.registerRoute("PUT", path, response, options);
+  put(path: string, handler: Handler): this;
+  put(path: string, response: RouteResponseSpec, options?: RouteOptions): this;
+  put(path: string, responseOrHandler: RouteResponseSpec | Handler, options?: RouteOptions): this {
+    if (typeof responseOrHandler === "function") {
+      return this.registerHandlerRoute("PUT", path, responseOrHandler);
+    }
+    return this.registerRoute("PUT", path, responseOrHandler, options);
   }
 
-  delete(path: string, response: RouteResponseSpec, options?: RouteOptions): this {
-    return this.registerRoute("DELETE", path, response, options);
+  delete(path: string, handler: Handler): this;
+  delete(path: string, response: RouteResponseSpec, options?: RouteOptions): this;
+  delete(path: string, responseOrHandler: RouteResponseSpec | Handler, options?: RouteOptions): this {
+    if (typeof responseOrHandler === "function") {
+      return this.registerHandlerRoute("DELETE", path, responseOrHandler);
+    }
+    return this.registerRoute("DELETE", path, responseOrHandler, options);
   }
 
-  patch(path: string, response: RouteResponseSpec, options?: RouteOptions): this {
-    return this.registerRoute("PATCH", path, response, options);
+  patch(path: string, handler: Handler): this;
+  patch(path: string, response: RouteResponseSpec, options?: RouteOptions): this;
+  patch(path: string, responseOrHandler: RouteResponseSpec | Handler, options?: RouteOptions): this {
+    if (typeof responseOrHandler === "function") {
+      return this.registerHandlerRoute("PATCH", path, responseOrHandler);
+    }
+    return this.registerRoute("PATCH", path, responseOrHandler, options);
   }
 
-  options(path: string, response: RouteResponseSpec, options?: RouteOptions): this {
-    return this.registerRoute("OPTIONS", path, response, options);
+  options(path: string, handler: Handler): this;
+  options(path: string, response: RouteResponseSpec, options?: RouteOptions): this;
+  options(path: string, responseOrHandler: RouteResponseSpec | Handler, options?: RouteOptions): this {
+    if (typeof responseOrHandler === "function") {
+      return this.registerHandlerRoute("OPTIONS", path, responseOrHandler);
+    }
+    return this.registerRoute("OPTIONS", path, responseOrHandler, options);
   }
 
-  head(path: string, response: RouteResponseSpec, options?: RouteOptions): this {
-    return this.registerRoute("HEAD", path, response, options);
+  head(path: string, handler: Handler): this;
+  head(path: string, response: RouteResponseSpec, options?: RouteOptions): this;
+  head(path: string, responseOrHandler: RouteResponseSpec | Handler, options?: RouteOptions): this {
+    if (typeof responseOrHandler === "function") {
+      return this.registerHandlerRoute("HEAD", path, responseOrHandler);
+    }
+    return this.registerRoute("HEAD", path, responseOrHandler, options);
+  }
+
+  onRequest(hook: RequestHook): this {
+    this.hooks.onRequest(hook);
+    return this;
+  }
+
+  onResponse(hook: ResponseHook): this {
+    this.hooks.onResponse(hook);
+    return this;
+  }
+
+  onError(hook: ErrorHook): this {
+    this.hooks.onError(hook);
+    return this;
   }
 
   text(path: string, body: TemplateValue, options?: RouteOptions): this {
@@ -1035,8 +1186,19 @@ export class App {
     return this;
   }
 
+  private hasHandlerRoutes(): boolean {
+    return this.routes.some((r) => r.kind === "handler");
+  }
+
   listen(callback?: (started: boolean) => void): this {
     const useHttps = Boolean(this.config.keyFileName || this.config.certFileName);
+    const handlerRoutes = this.hasHandlerRoutes();
+
+    if (handlerRoutes && this.config.runtime === "rust") {
+      throw new Error(
+        "Handler routes are not compatible with the Rust runtime. Use runtime: 'auto' or 'node'."
+      );
+    }
 
     if (this.config.runtime === "node") {
       this.startNodeServer(callback);
@@ -1045,6 +1207,12 @@ export class App {
 
     if (this.canUseBunRuntime(useHttps)) {
       this.startBunServer(callback);
+      return this;
+    }
+
+    // Handler routes can't be served by the Rust runtime — fall back to Node.
+    if (handlerRoutes) {
+      this.startNodeServer(callback);
       return this;
     }
 
