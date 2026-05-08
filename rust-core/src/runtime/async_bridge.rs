@@ -55,12 +55,13 @@ pub struct Completion {
 }
 
 /// Per-worker bridge state. Owned by the io_uring worker thread.
+///
+/// The 8-byte read buffer the io_uring loop uses for the eventfd Read op is
+/// NOT stored here — sharing the bridge via `Arc` would prevent the loop from
+/// taking a mutable pointer into it. The loop owns its own `Box<[u8; 8]>`.
 pub struct WorkerBridge {
     eventfd: RawFd,
     completions: Arc<Mutex<VecDeque<Completion>>>,
-    /// 8-byte buffer the io_uring loop reads into when the eventfd CQE fires.
-    /// Lives here so it has a stable address for the lifetime of the worker.
-    pub eventfd_read_buf: Box<[u8; 8]>,
 }
 
 impl WorkerBridge {
@@ -76,7 +77,6 @@ impl WorkerBridge {
         Ok(Self {
             eventfd: fd,
             completions: Arc::new(Mutex::new(VecDeque::with_capacity(64))),
-            eventfd_read_buf: Box::new([0u8; 8]),
         })
     }
 

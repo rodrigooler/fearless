@@ -27,6 +27,15 @@ pub fn run_with_aot(
     }
     let server = Arc::new(server_builder);
 
+    // Initialize the shared tokio runtime ONCE before spawning io_uring workers,
+    // so each worker's `WorkerBridge::spawn` can rely on `runtime()` being set.
+    // The chosen pool size matches the io_uring worker count — async handlers
+    // run alongside the network workers, no over-subscription needed.
+    #[cfg(feature = "pg-handles")]
+    {
+        crate::runtime::async_bridge::init_runtime(worker_count);
+    }
+
     let mut handles = Vec::with_capacity(worker_count);
     for i in 0..worker_count {
         let core = cores.get(i % cores.len().max(1)).copied();
@@ -60,7 +69,20 @@ fn worker_main(listener: TcpListener, server: Arc<BenchmarkServer>, core: Option
         .register_files(&[listener_fd])
         .expect("register listener fd");
     let buffers = crate::uring::buffers::FixedBuffers::register(&mut ring).expect("register buffers");
-    crate::uring::accept::run_loop(&mut ring, 0 /* fixed slot */, server, buffers).expect("worker loop");
+
+    #[cfg(feature = "pg-handles")]
+    {
+        let bridge = Arc::new(
+            crate::runtime::async_bridge::WorkerBridge::new().expect("worker bridge"),
+        );
+        crate::uring::accept::run_loop(&mut ring, 0 /* fixed slot */, server, buffers, bridge)
+            .expect("worker loop");
+    }
+    #[cfg(not(feature = "pg-handles"))]
+    {
+        crate::uring::accept::run_loop(&mut ring, 0 /* fixed slot */, server, buffers)
+            .expect("worker loop");
+    }
 }
 
 fn build_ring() -> io::Result<IoUring> {

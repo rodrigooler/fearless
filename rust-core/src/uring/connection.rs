@@ -33,6 +33,11 @@ pub struct Connection {
 enum State {
     Reading,
     Writing,
+    /// Parked while an async handler runs on the tokio runtime. No I/O ops
+    /// are submitted in this state; the connection is woken by an eventfd
+    /// CQE that drains the bridge and calls `deliver_async_response`.
+    #[cfg(feature = "pg-handles")]
+    AwaitingAsync,
 }
 
 impl Connection {
@@ -126,6 +131,14 @@ impl Connection {
                 }
                 self.submit_read(ring, token)?;
                 Ok(true)
+            }
+            #[cfg(feature = "pg-handles")]
+            State::AwaitingAsync => {
+                // We don't submit Recv/Send while parked, so a CQE arriving here
+                // means a stale completion slipped past the generation check, or
+                // a logic bug. Close defensively rather than risk corrupting state.
+                self.close();
+                Ok(false)
             }
         }
     }
@@ -314,6 +327,57 @@ impl Connection {
             std::ptr::copy_nonoverlapping(scratch.as_ptr(), dst, n);
         }
         Some(n)
+    }
+}
+
+#[cfg(feature = "pg-handles")]
+impl Connection {
+    /// Transition the connection into the parked state. Called by the async
+    /// dispatcher (Task 7) after spawning the handler future on the bridge.
+    /// While parked, no I/O is submitted; the loop wakes us via the eventfd
+    /// CQE and calls `deliver_async_response`.
+    #[allow(dead_code)] // wired up in Task 7
+    pub(crate) fn park_for_async(&mut self) {
+        self.state = State::AwaitingAsync;
+    }
+
+    /// Called from the io_uring loop when the eventfd CQE delivers an async
+    /// handler's response. Copies bytes into the slot's write region,
+    /// transitions to `Writing`, and submits a Send.
+    ///
+    /// Returns `Ok(true)` if the connection is still alive (Send submitted),
+    /// `Ok(false)` if it should be removed (response too large, or unexpected
+    /// state). MVP closes the connection after the response drains — keep-alive
+    /// on the async path is a Phase 1.2 follow-up.
+    pub(crate) fn deliver_async_response(
+        &mut self,
+        ring: &mut IoUring,
+        token: u64,
+        bytes: &[u8],
+    ) -> io::Result<bool> {
+        // Defensive: only honor delivery while parked. A late delivery after
+        // the conn already closed and the slot was reused could land here
+        // through a generation race; ignore it.
+        if !matches!(self.state, State::AwaitingAsync) {
+            return Ok(true);
+        }
+        if bytes.len() > WRITE_REGION_BYTES {
+            self.close();
+            return Ok(false);
+        }
+        let write_slice = unsafe {
+            std::slice::from_raw_parts_mut(self.slot.write_ptr, WRITE_REGION_BYTES)
+        };
+        write_slice[..bytes.len()].copy_from_slice(bytes);
+        self.write_filled = bytes.len();
+        self.write_offset = 0;
+        // MVP: close after the async response drains. Keep-alive across
+        // async boundaries needs more bookkeeping (request body buffering,
+        // pipelined-request handling under park) — punted to Phase 1.2.
+        self.close_after_drain = true;
+        self.state = State::Writing;
+        self.submit_write(ring, token)?;
+        Ok(true)
     }
 }
 
