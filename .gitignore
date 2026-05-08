@@ -5,3 +5,6 @@ rust-core/target
 .DS_Store
 *.log
 FrameworkBenchmarks/
+
+# Internal team docs — local only, not for public history
+docs/superpowers/
