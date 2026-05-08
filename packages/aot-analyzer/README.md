@@ -93,6 +93,39 @@ The result format is stable JSON — safe for editor extensions, CI scripts, etc
 | `return-shape` | Returns must be `ctx.<builder>()` |
 | `template-substitutions` | Template `${...}` must be `ctx.X` |
 
+## Async handlers (Phase 1.2)
+
+The analyzer accepts `async` arrow functions when every `await` in the body
+targets a registered framework handle's method. Registered handles look like:
+
+```typescript
+import { fearless, sql } from "fearless";
+
+const db = fearless.sql("primary");
+
+app.get("/users/:id", async (ctx) =>
+  await db.queryOne(sql`SELECT id, name FROM users WHERE id = ${ctx.params.id}`)
+);
+```
+
+Recognized handle types:
+- `fearless.sql(name)` → produces a SQL handle (Phase 1.2 ✅)
+- `fearless.kv(name)` → KV handle (Phase 1.3, planned)
+- `fearless.http(name)` → HTTP handle (Phase 1.3, planned)
+
+Recognized handle methods (Phase 1.2):
+- `queryOne(sql\`...\`)` → `Promise<Row | null>`
+- `queryMany(sql\`...\`)` → `Promise<Row[]>`
+- `execute(sql\`...\`)` → `Promise<number>` (rows affected)
+
+The `sql` tag is a template literal: substitutions become bind parameters.
+Each substitution must be either:
+- `ctx.params.<name>` (URL path parameter)
+- `ctx.query.<name>` (URL query string)
+- `Math.floor(Math.random() * <NUM>) + <NUM>` (random integer in range — common for benchmarks)
+
+Anything else is rejected. Phase 1.3 expands this set.
+
 ## License
 
 MIT

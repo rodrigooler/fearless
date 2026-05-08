@@ -62,6 +62,52 @@ The generated Rust depends on a small runtime exposed at `crate::aot::runtime` i
 
 If you embed this in a different Rust host, you can copy `src/runtime/mod.rs` and adapt the dispatcher. The runtime contract is stable across versions.
 
+## Async handler emission (Phase 1.2)
+
+When the analyzer marks a handler as async-compilable, the transpiler emits a
+Rust `pub async fn` that calls into the build-generated `HandleRegistry`:
+
+Input TypeScript:
+
+```typescript
+const db = fearless.sql("primary");
+
+app.get("/db", async (ctx) =>
+  await db.queryOne(sql`SELECT id, randomnumber FROM world WHERE id = ${Math.floor(Math.random() * 10000) + 1}`)
+);
+```
+
+Generated Rust (truncated):
+
+```rust
+pub async fn handler_<id>(
+    ctx: &crate::aot::runtime::AotRequest<'_>,
+    handles: &crate::aot::handles::HandleRegistry,
+) -> Vec<u8> {
+    let p1: i32 = fastrand::i32(1..=10000);
+    let row = match handles.sql.get("primary").expect(...).query_one("db_<hash>", &[&p1]).await {
+        Ok(Some(r)) => r,
+        Ok(None) => return crate::aot::runtime::not_found_response(),
+        Err(_) => return crate::aot::runtime::error_response(503, b"database error"),
+    };
+    let mut body = Vec::with_capacity(128);
+    // ... manual JSON build ...
+    resp
+}
+```
+
+The transpiler:
+1. Parses the `sql\`...\`` template, extracting bind params and replacing
+   substitutions with `$1, $2, ...` placeholders
+2. Generates a stable statement key: `<handleVar>_<sha256[0..8]>` — same SQL
+   text + handle produces the same key across builds
+3. Emits param coercion (currently i32 only — `s.parse().ok()`)
+4. Emits the async query call with the statement key
+5. Emits manual byte-level JSON construction (no serde overhead)
+
+The statement keys are aggregated by `@fearless/aot-build` into a single
+`phf::phf_map` and prepared at startup.
+
 ## License
 
 MIT
