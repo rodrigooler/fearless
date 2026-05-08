@@ -49,11 +49,7 @@
     }
   },
   "pendingRun": {
-    "note": "Real TFB run on Citrine still pending — see docs/superpowers/plans/2026-05-08-handoff-linux.md",
-    "expectedNumbersTarget": {
-      "plaintext": ">= 6000000",
-      "json": ">= 3000000"
-    }
+    "note": "Real TFB run on bare-metal Linux still pending."
   },
   "optimizations": {
     "rust": [
