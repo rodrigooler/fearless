@@ -19,6 +19,8 @@ export {
   ALLOWED_CTX_CHAINS,
   ALLOWED_CTX_INPUTS,
 } from "./types.js";
+export { discoverHandles } from "./handles.js";
+export type { DiscoveredHandle, HandleKind } from "./handles.js";
 
 /**
  * The full set of Phase 0 rules. Order matters only for output stability —
