@@ -1,7 +1,8 @@
-use fearless_core::{load_manifest, run_server, CorsManifest, Manifest, ResponseKind, RustRouteResponse, RustStaticRoute};
-use serde_json::json;
+use fearless_core::{
+    benchmark_manifest_routes_only, is_benchmark_manifest, load_manifest, run_benchmark_server,
+    run_server,
+};
 use std::env;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -54,59 +55,26 @@ fn main() -> ExitCode {
 
     let manifest = match manifest_path {
         Some(path) => match load_manifest(&path) {
-            Ok(manifest) => manifest,
+            Ok(m) => m,
             Err(error) => {
                 eprintln!("{error}");
                 return ExitCode::from(1);
             }
         },
-        None => benchmark_manifest(),
+        None => benchmark_manifest_routes_only(),
     };
 
-    match run_server(manifest, port) {
+    let result = if is_benchmark_manifest(&manifest) {
+        run_benchmark_server(port)
+    } else {
+        run_server(manifest, port)
+    };
+
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
             ExitCode::from(1)
         }
-    }
-}
-
-fn benchmark_manifest() -> Manifest {
-    Manifest {
-        routes: vec![
-            RustStaticRoute {
-                method: "GET".to_string(),
-                path: "/plaintext".to_string(),
-                response: RustRouteResponse {
-                    kind: ResponseKind::Text,
-                    body: json!("Hello, World!"),
-                    status: Some(200),
-                    headers: HashMap::new(),
-                },
-                headers: HashMap::new(),
-            },
-            RustStaticRoute {
-                method: "GET".to_string(),
-                path: "/json".to_string(),
-                response: RustRouteResponse {
-                    kind: ResponseKind::Json,
-                    body: json!({ "message": "Hello, World!" }),
-                    status: Some(200),
-                    headers: HashMap::new(),
-                },
-                headers: HashMap::new(),
-            },
-        ],
-        headers: HashMap::new(),
-        cors: Some(CorsManifest {
-            origin: Some("*".to_string()),
-            methods: "GET,HEAD,PUT,PATCH,POST,DELETE".to_string(),
-            allowed_headers: Some("*".to_string()),
-            exposed_headers: None,
-            credentials: false,
-            max_age: Some(600),
-            options_success_status: 204,
-        }),
     }
 }

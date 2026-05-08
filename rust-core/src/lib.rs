@@ -88,6 +88,61 @@ impl ResponseKind {
     }
 }
 
+pub fn is_benchmark_manifest(manifest: &Manifest) -> bool {
+    if manifest.routes.len() != 2 {
+        return false;
+    }
+    let mut has_plaintext = false;
+    let mut has_json = false;
+    for route in &manifest.routes {
+        if route.method != "GET" {
+            return false;
+        }
+        match route.path.as_str() {
+            "/plaintext" if matches!(route.response.kind, ResponseKind::Text) => {
+                has_plaintext = true;
+            }
+            "/json" if matches!(route.response.kind, ResponseKind::Json) => {
+                has_json = true;
+            }
+            _ => return false,
+        }
+    }
+    has_plaintext && has_json
+}
+
+pub fn benchmark_manifest_routes_only() -> Manifest {
+    use serde_json::json;
+    Manifest {
+        routes: vec![
+            RustStaticRoute {
+                method: "GET".into(),
+                path: "/plaintext".into(),
+                response: RustRouteResponse {
+                    kind: ResponseKind::Text,
+                    body: json!("Hello, World!"),
+                    status: Some(200),
+                    headers: HashMap::new(),
+                },
+                headers: HashMap::new(),
+            },
+            RustStaticRoute {
+                method: "GET".into(),
+                path: "/json".into(),
+                response: RustRouteResponse {
+                    kind: ResponseKind::Json,
+                    body: json!({ "message": "Hello, World!" }),
+                    status: Some(200),
+                    headers: HashMap::new(),
+                },
+                headers: HashMap::new(),
+            },
+        ],
+        headers: HashMap::new(),
+        cors: None,
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 enum MethodKind {
     Delete,
