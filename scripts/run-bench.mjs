@@ -106,7 +106,7 @@ SQL
   sh("docker build -f bench/techempower/fearless-rust-aot.dockerfile -t fearless-rust:bench . 2>&1 | tail -1");
 
   console.log(grey("setup: start rust-core container (8080)..."));
-  sh("docker run -d --name fearless-aot --ulimit memlock=-1 --cap-add SYS_NICE --cap-add NET_ADMIN --security-opt seccomp=unconfined -p 8080:8080 fearless-rust:bench >/dev/null");
+  sh("docker run -d --name fearless-aot --ulimit memlock=-1 --cap-add SYS_NICE --cap-add NET_ADMIN --security-opt seccomp=unconfined -p 8080:8080 -e FEARLESS_SQL_PRIMARY=postgres://postgres:pw@host.docker.internal:5432/postgres -e FEARLESS_SQL_PRIMARY_POOL_SIZE=64 fearless-rust:bench >/dev/null");
   sh("sleep 2");
 
   console.log(grey("setup: start Bun server (8081)..."));
@@ -131,9 +131,11 @@ EOF"`);
   const aotSmoke = sh("docker exec wrk-runner curl -s http://127.0.0.1:8080/plaintext").trim();
   const bunSmoke = sh("docker exec wrk-runner curl -s http://127.0.0.1:8081/plaintext").trim();
   const dbSmoke = sh("docker exec wrk-runner curl -s http://127.0.0.1:8081/db").trim();
+  const aotDbSmoke = sh("docker exec wrk-runner curl -s http://127.0.0.1:8080/db").trim();
   if (aotSmoke !== "Hello, World!") throw new Error(`AOT smoke failed: ${aotSmoke}`);
   if (bunSmoke !== "Hello, World!") throw new Error(`Bun smoke failed: ${bunSmoke}`);
   if (!dbSmoke.includes("id")) throw new Error(`DB smoke failed: ${dbSmoke}`);
+  if (!aotDbSmoke.includes("id")) throw new Error(`AOT /db smoke failed: ${aotDbSmoke}`);
   console.log(grey("setup: ✓ ready"));
 }
 
@@ -186,6 +188,8 @@ function makeScenarios(quick) {
     ["aot/echo-c64",          "AOT /echo c=64",                     () => wrkRun({ port: 8080, path: "/echo/Alice" })],
     ["aot/config-c64",        "AOT /config c=64",                   () => wrkRun({ port: 8080, path: "/config" })],
     ["aot/access-c64",        "AOT /access c=64 (header cond)",     () => wrkRun({ port: 8080, path: "/access" })],
+    ["aot/db-c64",            "AOT /db c=64 (Postgres random world)",  () => wrkRun({ port: 8080, path: "/db" })],
+    ["aot/db-c256",           "AOT /db c=256 (MVP target ≥100k)",      () => wrkRun({ port: 8080, path: "/db", threads: 8, conns: 256 })],
     ["aot/plaintext-pipe32",  "AOT /plaintext c=256 pipe-32",       () => wrkRun({ port: 8080, path: "/plaintext", conns: 256, pipeline: 32 })],
     ["aot/json-pipe32",       "AOT /json c=256 pipe-32",            () => wrkRun({ port: 8080, path: "/json", conns: 256, pipeline: 32 })],
     ["aot/echo-pipe32",       "AOT /echo c=256 pipe-32",            () => wrkRun({ port: 8080, path: "/echo/Alice", conns: 256, pipeline: 32 })],
