@@ -33,6 +33,7 @@ export type { SecurityHeadersOptions } from "./dependencies/index.js";
 // Functional handler API
 export { RequestContext } from "./ctx.js";
 export { HttpError, ValidationError } from "./errors.js";
+export { HookChain } from "./middleware.js";
 export type {
   Ctx,
   Handler,
