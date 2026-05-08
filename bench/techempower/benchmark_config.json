@@ -1,24 +1,47 @@
 {
   "framework": "fearless",
-  "tests": [{
-    "default": {
-      "json_url": "/json",
-      "plaintext_url": "/plaintext",
-      "port": 8080,
-      "approach": "Realistic",
-      "classification": "Micro",
-      "database": "None",
-      "framework": "fearless",
-      "language": "Rust",
-      "flavor": "None",
-      "orm": "None",
-      "platform": "rust",
-      "webserver": "None",
-      "os": "Linux",
-      "database_os": "Linux",
-      "display_name": "Fearless",
-      "notes": "",
-      "versus": "rust"
+  "tests": [
+    {
+      "default": {
+        "plaintext_url": "/plaintext",
+        "json_url": "/json",
+        "db_url": "/db",
+        "query_url": "/queries?queries=",
+        "port": 8080,
+        "approach": "Realistic",
+        "classification": "Fullstack",
+        "database": "Postgres",
+        "framework": "fearless",
+        "language": "TypeScript",
+        "flavor": "Bun",
+        "orm": "Raw",
+        "platform": "Rust + Bun",
+        "webserver": "io_uring",
+        "os": "Linux",
+        "database_os": "Linux",
+        "display_name": "fearless",
+        "notes": "Hybrid runtime: TypeScript handlers compile to Rust at build time (AOT). Async handlers fall back to Bun. Single deployable binary serves both via dispatcher in connection.rs.",
+        "versus": "fastify"
+      },
+      "aot": {
+        "plaintext_url": "/plaintext",
+        "json_url": "/json",
+        "port": 8080,
+        "approach": "Realistic",
+        "classification": "Micro",
+        "database": "None",
+        "framework": "fearless",
+        "language": "TypeScript",
+        "flavor": "AOT-Rust",
+        "orm": "None",
+        "platform": "Rust",
+        "webserver": "io_uring",
+        "os": "Linux",
+        "database_os": "Linux",
+        "display_name": "fearless [aot]",
+        "notes": "AOT-only configuration: TypeScript handlers compiled to native Rust functions at build time. No JS runtime in the request hot path.",
+        "versus": "actix"
+      }
     }
-  }]
+  ]
 }
