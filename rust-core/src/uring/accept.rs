@@ -1,6 +1,6 @@
 use crate::benchmark::responses::BenchmarkServer;
 use crate::uring::connection::Connection;
-use io_uring::{opcode, types::Fd, IoUring};
+use io_uring::{opcode, types::Fixed, IoUring};
 use rustc_hash::FxHashMap;
 use std::io;
 use std::os::fd::RawFd;
@@ -10,7 +10,7 @@ const ACCEPT_TOKEN: u64 = u64::MAX;
 
 pub fn run_loop(
     ring: &mut IoUring,
-    listener_fd: RawFd,
+    listener_slot: u32,
     server: Arc<BenchmarkServer>,
 ) -> io::Result<()> {
     let mut conns: FxHashMap<u64, Connection> = FxHashMap::default();
@@ -18,7 +18,7 @@ pub fn run_loop(
     // Reused across iterations so the completion drain is allocation-free in steady state.
     let mut completions: Vec<(u64, i32, u32)> = Vec::with_capacity(crate::uring::runtime::RING_ENTRIES as usize);
 
-    submit_accept(ring, listener_fd)?;
+    submit_accept(ring, listener_slot)?;
 
     loop {
         ring.submit_and_wait(1)?;
@@ -31,7 +31,7 @@ pub fn run_loop(
         for (user_data, result, flags) in completions.drain(..) {
             if user_data == ACCEPT_TOKEN {
                 if result < 0 {
-                    submit_accept(ring, listener_fd)?;
+                    submit_accept(ring, listener_slot)?;
                     continue;
                 }
                 let client_fd = result as RawFd;
@@ -41,7 +41,7 @@ pub fn run_loop(
                 conn.submit_read(ring, token)?;
                 conns.insert(token, conn);
                 if !io_uring::cqueue::more(flags) {
-                    submit_accept(ring, listener_fd)?;
+                    submit_accept(ring, listener_slot)?;
                 }
                 continue;
             }
@@ -55,8 +55,8 @@ pub fn run_loop(
     }
 }
 
-fn submit_accept(ring: &mut IoUring, listener_fd: RawFd) -> io::Result<()> {
-    let entry = opcode::AcceptMulti::new(Fd(listener_fd))
+fn submit_accept(ring: &mut IoUring, listener_slot: u32) -> io::Result<()> {
+    let entry = opcode::AcceptMulti::new(Fixed(listener_slot))
         .build()
         .user_data(ACCEPT_TOKEN);
     unsafe { ring.submission().push(&entry).map_err(|_| io::Error::other("sq full"))? };
