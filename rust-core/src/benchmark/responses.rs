@@ -55,6 +55,12 @@ impl BenchmarkResponses {
     }
 }
 
+impl Default for BenchmarkResponses {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn placeholder_date() -> [u8; DATE_LEN] {
     *b"Thu, 01 Jan 1970 00:00:00 GMT"
 }
