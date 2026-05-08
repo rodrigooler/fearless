@@ -328,7 +328,7 @@ Function handlers run on Bun's native HTTP server. Realistic ranges based on Bun
 
 These are limited by Bun + your IO, not by Fearless.
 
-See [`benchmark.json`](./benchmark.json) for raw data and [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the Rust/TypeScript split.
+See [`benchmark.json`](./benchmark.json) for raw data, [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the Rust/TypeScript split, and [`docs/deployment-tuning.md`](./docs/deployment-tuning.md) for the host-side knobs that unlock 2-5x extra throughput on bare-metal Linux (IRQ affinity, RPS/RFS, sysctl, container caps).
 
 ## Linting (optional)
 
