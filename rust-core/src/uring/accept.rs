@@ -1,4 +1,5 @@
 use crate::benchmark::responses::BenchmarkServer;
+use crate::uring::buffers::FixedBuffers;
 use crate::uring::connection::Connection;
 use io_uring::{opcode, types::Fixed, IoUring};
 use rustc_hash::FxHashMap;
@@ -12,6 +13,7 @@ pub fn run_loop(
     ring: &mut IoUring,
     listener_slot: u32,
     server: Arc<BenchmarkServer>,
+    mut buffers: FixedBuffers,
 ) -> io::Result<()> {
     let mut conns: FxHashMap<u64, Connection> = FxHashMap::default();
     let mut next_token: u64 = 0;
@@ -37,7 +39,15 @@ pub fn run_loop(
                 let client_fd = result as RawFd;
                 let token = next_token;
                 next_token = next_token.wrapping_add(1);
-                let mut conn = Connection::new(client_fd, Arc::clone(&server));
+                let Some(slot) = buffers.acquire() else {
+                    // No free slots — close the new connection rather than queue forever.
+                    unsafe { libc::close(client_fd); }
+                    if !io_uring::cqueue::more(flags) {
+                        submit_accept(ring, listener_slot)?;
+                    }
+                    continue;
+                };
+                let mut conn = Connection::new(client_fd, Arc::clone(&server), slot);
                 conn.submit_read(ring, token)?;
                 conns.insert(token, conn);
                 if !io_uring::cqueue::more(flags) {
@@ -49,6 +59,9 @@ pub fn run_loop(
             if let Some(mut conn) = conns.remove(&user_data) {
                 if conn.handle_completion(ring, user_data, result)? {
                     conns.insert(user_data, conn);
+                } else {
+                    // Connection closed — return its slot to the pool.
+                    buffers.release(conn.slot());
                 }
             }
         }

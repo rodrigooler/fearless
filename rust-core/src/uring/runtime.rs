@@ -40,7 +40,8 @@ fn worker_main(listener: TcpListener, server: Arc<BenchmarkServer>, core: Option
     ring.submitter()
         .register_files(&[listener_fd])
         .expect("register listener fd");
-    crate::uring::accept::run_loop(&mut ring, 0 /* fixed slot */, server).expect("worker loop");
+    let buffers = crate::uring::buffers::FixedBuffers::register(&mut ring).expect("register buffers");
+    crate::uring::accept::run_loop(&mut ring, 0 /* fixed slot */, server, buffers).expect("worker loop");
 }
 
 fn build_ring() -> io::Result<IoUring> {

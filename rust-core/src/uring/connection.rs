@@ -1,19 +1,17 @@
 use crate::benchmark::parser::{parse_pipeline, Classification, Route};
 use crate::benchmark::responses::{BenchmarkServer, Variant};
+use crate::uring::buffers::{Slot, READ_REGION_BYTES, WRITE_REGION_BYTES};
 use io_uring::{opcode, types::Fd, IoUring};
 use std::io;
 use std::os::fd::RawFd;
 use std::sync::Arc;
 
-const READ_BUF: usize = 16 * 1024;
-const WRITE_BUF: usize = 64 * 1024;
 const MAX_PIPELINE: usize = 64;
 
 pub struct Connection {
     fd: RawFd,
     server: Arc<BenchmarkServer>,
-    read_buf: Box<[u8; READ_BUF]>,
-    write_buf: Box<[u8; WRITE_BUF]>,
+    slot: Slot,
     read_filled: usize,
     write_filled: usize,
     write_offset: usize,
@@ -28,12 +26,11 @@ enum State {
 }
 
 impl Connection {
-    pub fn new(fd: RawFd, server: Arc<BenchmarkServer>) -> Self {
+    pub fn new(fd: RawFd, server: Arc<BenchmarkServer>, slot: Slot) -> Self {
         Self {
             fd,
             server,
-            read_buf: Box::new([0u8; READ_BUF]),
-            write_buf: Box::new([0u8; WRITE_BUF]),
+            slot,
             read_filled: 0,
             write_filled: 0,
             write_offset: 0,
@@ -42,10 +39,14 @@ impl Connection {
         }
     }
 
+    pub fn slot(&self) -> Slot {
+        self.slot
+    }
+
     pub fn submit_read(&mut self, ring: &mut IoUring, token: u64) -> io::Result<()> {
-        debug_assert!(self.read_filled < READ_BUF, "read_filled out of bounds");
-        let ptr = unsafe { self.read_buf.as_mut_ptr().add(self.read_filled) };
-        let len = (READ_BUF - self.read_filled) as u32;
+        debug_assert!(self.read_filled < READ_REGION_BYTES, "read_filled out of bounds");
+        let ptr = unsafe { self.slot.read_ptr.add(self.read_filled) };
+        let len = (READ_REGION_BYTES - self.read_filled) as u32;
         let entry = opcode::Recv::new(Fd(self.fd), ptr, len)
             .build()
             .user_data(token);
@@ -62,7 +63,7 @@ impl Connection {
             self.write_offset < self.write_filled,
             "write_offset >= write_filled"
         );
-        let ptr = unsafe { self.write_buf.as_ptr().add(self.write_offset) };
+        let ptr = unsafe { self.slot.write_ptr.add(self.write_offset) };
         let len = (self.write_filled - self.write_offset) as u32;
         let entry = opcode::Send::new(Fd(self.fd), ptr, len)
             .build()
@@ -122,12 +123,16 @@ impl Connection {
         let snap = self.server.responses.snapshot();
         let mut classifications =
             [Classification { route: Route::NotFound, close: false }; MAX_PIPELINE];
-        let result = parse_pipeline(&self.read_buf[..self.read_filled], &mut classifications);
+        let result = {
+            let read_slice =
+                unsafe { std::slice::from_raw_parts(self.slot.read_ptr, self.read_filled) };
+            parse_pipeline(read_slice, &mut classifications)
+        };
 
         if result.count == 0 {
             // No complete request yet; need more data. Guard against full buffer with no terminator
             // (single oversized request) by closing rather than spinning.
-            if self.read_filled == READ_BUF {
+            if self.read_filled == READ_REGION_BYTES {
                 self.close();
                 return Ok(false);
             }
@@ -137,26 +142,31 @@ impl Connection {
 
         let mut close_after = false;
         let mut classified_consumed: usize = 0;
-        for (i, cls) in classifications[..result.count].iter().enumerate() {
-            let bytes = snap.get(variant_for(*cls));
-            if self.write_filled + bytes.len() > WRITE_BUF {
-                // This response would overflow the write buffer — flush what we have and
-                // leave the rest of the parsed batch in the read buffer for the next round.
-                if i == 0 {
-                    // Single response larger than WRITE_BUF — should be impossible with current
-                    // baked responses (~140B), but guard anyway.
-                    self.close();
-                    return Ok(false);
+        {
+            let write_slice = unsafe {
+                std::slice::from_raw_parts_mut(self.slot.write_ptr, WRITE_REGION_BYTES)
+            };
+            for (i, cls) in classifications[..result.count].iter().enumerate() {
+                let bytes = snap.get(variant_for(*cls));
+                if self.write_filled + bytes.len() > WRITE_REGION_BYTES {
+                    // This response would overflow the write buffer — flush what we have and
+                    // leave the rest of the parsed batch in the read buffer for the next round.
+                    if i == 0 {
+                        // Single response larger than WRITE_REGION_BYTES — should be impossible with
+                        // current baked responses (~140B), but guard anyway.
+                        self.close();
+                        return Ok(false);
+                    }
+                    break;
                 }
-                break;
-            }
-            self.write_buf[self.write_filled..self.write_filled + bytes.len()]
-                .copy_from_slice(&bytes);
-            self.write_filled += bytes.len();
-            classified_consumed += 1;
-            if cls.close {
-                close_after = true;
-                break;
+                write_slice[self.write_filled..self.write_filled + bytes.len()]
+                    .copy_from_slice(&bytes);
+                self.write_filled += bytes.len();
+                classified_consumed += 1;
+                if cls.close {
+                    close_after = true;
+                    break;
+                }
             }
         }
 
@@ -169,16 +179,22 @@ impl Connection {
         } else {
             // Re-parse just the prefix we used to find its byte count. Cheaper than carrying
             // per-request offsets through parse_pipeline.
+            let read_slice =
+                unsafe { std::slice::from_raw_parts(self.slot.read_ptr, self.read_filled) };
             let mut tmp = [Classification { route: Route::NotFound, close: false }; MAX_PIPELINE];
-            let prefix_result = parse_pipeline(
-                &self.read_buf[..self.read_filled],
-                &mut tmp[..classified_consumed],
-            );
+            let prefix_result = parse_pipeline(read_slice, &mut tmp[..classified_consumed]);
             prefix_result.consumed
         };
 
-        // Compact read buffer.
-        self.read_buf.copy_within(consumed..self.read_filled, 0);
+        // Compact read region. Use ptr::copy (memmove semantics — handles overlap) since we only
+        // hold raw pointers into the slot, not a slice we could call copy_within on.
+        if consumed > 0 {
+            unsafe {
+                let src = self.slot.read_ptr.add(consumed);
+                let dst = self.slot.read_ptr;
+                std::ptr::copy(src, dst, self.read_filled - consumed);
+            }
+        }
         self.read_filled -= consumed;
 
         self.close_after_drain = close_after;
