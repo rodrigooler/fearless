@@ -5,7 +5,8 @@ fn plaintext_keepalive_has_expected_layout() {
     let responses = BenchmarkResponses::new();
     let bytes = responses.snapshot().get(Variant::PlaintextKeepalive);
     let s = std::str::from_utf8(&bytes).unwrap();
-    assert!(s.starts_with("HTTP/1.1 200 OK\r\nServer: Fearless\r\nDate: "));
+    assert!(s.starts_with("HTTP/1.1 200 OK\r\nDate: "));
+    assert!(!s.contains("Server:"), "Server header intentionally omitted in benchmark mode");
     assert!(s.contains("Content-Type: text/plain; charset=utf-8\r\n"));
     assert!(s.contains("Content-Length: 13\r\n"));
     assert!(s.contains("Connection: keep-alive\r\n"));
