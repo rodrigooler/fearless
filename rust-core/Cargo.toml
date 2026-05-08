@@ -8,6 +8,7 @@ default = []
 io-uring = ["dep:tokio-uring"]
 
 [dependencies]
+arc-swap = "1.7"
 httpdate = "1"
 libc = "0.2"
 memchr = "2"

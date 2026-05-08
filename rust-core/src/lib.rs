@@ -19,6 +19,8 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+pub mod benchmark;
+
 const SERVER_HEADER: &str = "Fearless";
 const STATIC_RESPONSE_VARIANTS: usize = 2;
 const DATE_LEN: usize = 29;
