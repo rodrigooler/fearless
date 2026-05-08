@@ -17,18 +17,31 @@ const ALLOWED_GLOBALS = new Set([
  * over module-scope `const db = ...`, references to imported functions, etc.) means
  * the AOT compiler would need to model that identifier's runtime — which it can't.
  *
+ * Phase 1.2 exception: registered framework handle variables (e.g. `db`, `cache`)
+ * are allowed when the identifier is in `discoveredHandles`. The `sql` template tag
+ * used as the first argument to handle method calls is also allowed.
+ *
  * What's allowed inside the handler:
  *   - Locally declared identifiers (within the handler body)
  *   - The `ctx` parameter
  *   - JS literals (`undefined`, `null`, `true`, `false`)
+ *   - Registered framework handle variables from `discoveredHandles`
+ *   - The `sql` tagged template identifier (used with handle calls)
  *
  * What's blocked:
- *   - Captures over enclosing `const` / `let` / `var`
+ *   - Captures over enclosing `const` / `let` / `var` that are NOT handles
  *   - References to imports, globals like `console`, `parseInt`, `Date`, etc.
- *   - Any identifier not declared inside the handler body
+ *   - Any other identifier not declared inside the handler body
  */
-export const noExternalIdentifiersRule: Rule = ({ handler, typescript, ctxParamName }) => {
+export const noExternalIdentifiersRule: Rule = ({ handler, typescript, ctxParamName, discoveredHandles }) => {
   const reasons: Reason[] = [];
+
+  // Build the allowed external identifiers set from discovered handles
+  const allowedHandleNames = new Set(discoveredHandles.map((h) => h.variableName));
+  // `sql` is the tagged template literal tag used in handle calls — allow it alongside handles
+  if (allowedHandleNames.size > 0) {
+    allowedHandleNames.add("sql");
+  }
 
   // Collect all identifiers declared inside the handler body (let, const, var, function, parameter).
   const localScope = new Set<string>([ctxParamName]);
@@ -67,7 +80,11 @@ export const noExternalIdentifiersRule: Rule = ({ handler, typescript, ctxParamN
           // function name in declaration
         } else {
           // It's a USE — check scope
-          if (!localScope.has(node.text) && !ALLOWED_GLOBALS.has(node.text)) {
+          if (
+            !localScope.has(node.text) &&
+            !ALLOWED_GLOBALS.has(node.text) &&
+            !allowedHandleNames.has(node.text)
+          ) {
             reasons.push({
               rule: "no-external-identifiers",
               message: `Free identifier "${node.text}" is captured from outside the handler — blocks AOT`,

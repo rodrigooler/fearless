@@ -6,14 +6,19 @@ import { ALLOWED_CTX_BUILDERS, ALLOWED_CTX_CHAINS } from "../types.js";
  *   - `ctx.<builder>(...)` where builder ∈ json/text/html/raw/redirect/notFound/noContent
  *   - `ctx.<chain>(...)` where chain ∈ status/header/setHeaders (used inline before a builder)
  *
+ * Phase 1.2 exception: calls of the form `<handleVar>.<method>(...)` where `<handleVar>`
+ * is a registered framework handle are allowed. These map to native Rust async operations.
+ *
  * Any other call expression — `console.log()`, `parseInt()`, `JSON.stringify()`,
  * a user-defined function, etc. — falls back to Bun.
  *
  * String method calls (`"abc".toUpperCase()`) are also blocked because they require
  * a Rust runtime model of String methods. Phase 1+ may unblock specific ones.
  */
-export const noDisallowedCallsRule: Rule = ({ handler, typescript, ctxParamName }) => {
+export const noDisallowedCallsRule: Rule = ({ handler, typescript, ctxParamName, discoveredHandles }) => {
   const reasons: Reason[] = [];
+
+  const handleNames = new Set(discoveredHandles.map((h) => h.variableName));
 
   const visit = (node: import("typescript").Node): void => {
     if (typescript.isCallExpression(node)) {
@@ -78,9 +83,19 @@ export const noDisallowedCallsRule: Rule = ({ handler, typescript, ctxParamName 
           node.arguments.forEach((arg) => visit(arg));
           return;
         }
+
+        // Allow <handleVar>.<method>(...) — calls on registered framework handles
+        if (
+          typescript.isIdentifier(callee.expression) &&
+          handleNames.has(callee.expression.text)
+        ) {
+          // Recurse into arguments (e.g. the sql`...` template arg)
+          node.arguments.forEach((arg) => visit(arg));
+          return;
+        }
       }
 
-      // Anything else: not a ctx call — block.
+      // Anything else: not a ctx call and not a handle call — block.
       const text = callee.getText(callee.getSourceFile());
       reasons.push({
         rule: "no-disallowed-calls",

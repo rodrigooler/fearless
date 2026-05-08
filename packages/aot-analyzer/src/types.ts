@@ -1,4 +1,5 @@
 import type ts from "typescript";
+import type { DiscoveredHandle } from "./handles.js";
 
 /**
  * Reason a handler does not compile to Rust under the Phase 0 subset.
@@ -83,6 +84,12 @@ export interface RuleContext {
   readonly typescript: typeof ts;
   /** Identifier name bound to Ctx in the handler signature. Currently always "ctx". */
   readonly ctxParamName: string;
+  /**
+   * Handles discovered in the source file (e.g. `const db = fearless.sql("primary")`).
+   * Used by Phase 1.2+ rules to allow `await` expressions on registered handles.
+   * Empty array = Phase 0 behavior (all awaits rejected).
+   */
+  readonly discoveredHandles: readonly DiscoveredHandle[];
 }
 
 /**

@@ -1,6 +1,7 @@
 import ts from "typescript";
 import type { AnalysisResult, Reason, Rule, RuleContext } from "./types.js";
 import { HANDLER_PARAM_NAME } from "./types.js";
+import { discoverHandles as _discoverHandles } from "./handles.js";
 import { handlerShapeRule } from "./rules/handler-shape.js";
 import { noAwaitRule } from "./rules/no-await.js";
 import { noPromiseRule } from "./rules/no-promise.js";
@@ -90,11 +91,14 @@ export function analyzeHandler(
     sourceFile = owner;
   }
 
+  const discoveredHandles = _discoverHandles(sourceFile, ts);
+
   const ruleContext: RuleContext = {
     handler,
     sourceFile,
     typescript: ts,
     ctxParamName: HANDLER_PARAM_NAME,
+    discoveredHandles,
   };
 
   const reasons: Reason[] = [];

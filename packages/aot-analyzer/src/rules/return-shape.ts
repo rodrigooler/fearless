@@ -8,9 +8,15 @@ import { ALLOWED_CTX_BUILDERS, ALLOWED_CTX_CHAINS } from "../types.js";
  *
  * For arrow functions with concise body (`() => ctx.json(...)`), the body itself
  * is the return expression. For block bodies, every reachable `return` must qualify.
+ *
+ * Phase 1.2 exception: async handlers may return `await <handleVar>.<method>(...)`
+ * when `<handleVar>` is a registered framework handle. The Rust transpiler maps these
+ * to native typed return values.
  */
-export const returnShapeRule: Rule = ({ handler, typescript, ctxParamName }) => {
+export const returnShapeRule: Rule = ({ handler, typescript, ctxParamName, discoveredHandles }) => {
   const reasons: Reason[] = [];
+
+  const handleNames = new Set(discoveredHandles.map((h) => h.variableName));
 
   const isCtxBuilderCall = (expr: import("typescript").Expression): boolean => {
     if (!typescript.isCallExpression(expr)) {
@@ -51,12 +57,31 @@ export const returnShapeRule: Rule = ({ handler, typescript, ctxParamName }) => 
     return ALLOWED_CTX_BUILDERS.has(methodName);
   };
 
-  // Concise arrow body: `(ctx) => ctx.json({...})`
+  /**
+   * Check if an expression is `await <handleVar>.<method>(...)` on a registered handle.
+   * Allowed as a return value for Phase 1.2 async handlers.
+   */
+  const isHandleAwaitCall = (expr: import("typescript").Expression): boolean => {
+    if (handleNames.size === 0) return false;
+    if (!typescript.isAwaitExpression(expr)) return false;
+    const inner = expr.expression;
+    return (
+      typescript.isCallExpression(inner) &&
+      typescript.isPropertyAccessExpression(inner.expression) &&
+      typescript.isIdentifier(inner.expression.expression) &&
+      handleNames.has(inner.expression.expression.text)
+    );
+  };
+
+  const isValidReturn = (expr: import("typescript").Expression): boolean =>
+    isCtxBuilderCall(expr) || isHandleAwaitCall(expr);
+
+  // Concise arrow body: `(ctx) => ctx.json({...})` or `(ctx) => await db.queryOne(...)`
   if (
     typescript.isArrowFunction(handler) &&
     !typescript.isBlock(handler.body)
   ) {
-    if (!isCtxBuilderCall(handler.body)) {
+    if (!isValidReturn(handler.body)) {
       reasons.push({
         rule: "return-shape",
         message:
@@ -69,7 +94,7 @@ export const returnShapeRule: Rule = ({ handler, typescript, ctxParamName }) => 
     return reasons;
   }
 
-  // Block body: every return must end in a ctx builder. Implicit fall-off (no return) is allowed
+  // Block body: every return must end in a ctx builder or a handle await. Implicit fall-off (no return) is allowed
   // ONLY if every code path explicitly returns — but the simpler rule is "every return statement
   // is a builder call". An implicit no-return = fall-back-to-undefined which doesn't compile.
   let returnCount = 0;
@@ -83,7 +108,7 @@ export const returnShapeRule: Rule = ({ handler, typescript, ctxParamName }) => 
           start: node.getStart(),
           end: node.getEnd(),
         });
-      } else if (!isCtxBuilderCall(node.expression)) {
+      } else if (!isValidReturn(node.expression)) {
         reasons.push({
           rule: "return-shape",
           message:
