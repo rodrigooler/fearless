@@ -1,0 +1,33 @@
+{
+  "name": "@fearless/bun-runtime",
+  "version": "0.1.0",
+  "description": "Bun-side companion runtime for Fearless: imports a user app and serves the routes that didn't AOT-compile, on a configurable port. Pairs with the rust-core binary via the dual-port architecture.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "fearless-bun": "dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\" && tsc"
+  },
+  "dependencies": {
+    "typescript": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
+}
