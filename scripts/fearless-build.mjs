@@ -63,6 +63,7 @@ function main() {
 
   const handlersPath = resolve(aotDir, "handlers.rs");
   const manifestPath = resolve(aotDir, "dispatch_manifest.json");
+  const registryInitPath = resolve(aotDir, "registry_init.rs");
 
   if (result.summary.aot === 0) {
     // Restore the placeholder handlers.rs so the aot-handlers feature still
@@ -81,10 +82,32 @@ function main() {
   }
   writeFileSync(manifestPath, JSON.stringify(result.dispatchManifest, null, 2));
 
+  // The `registry_init` module is gated behind `pg-handles + aot-handlers` in
+  // mod.rs. When the build produces async SQL handlers, write the generated
+  // STATEMENTS map + register_handles() body. Otherwise emit a placeholder so
+  // the gated module still compiles cleanly when the features are turned on
+  // (no statements, empty registry).
+  if (result.registryRustSource && result.registryRustSource.length > 0) {
+    writeFileSync(registryInitPath, result.registryRustSource);
+  } else {
+    writeFileSync(
+      registryInitPath,
+      "// Placeholder — `fearless build` did not find any AOT-eligible async SQL handlers.\n" +
+        "#![cfg(all(feature = \"pg-handles\", feature = \"aot-handlers\"))]\n\n" +
+        "use std::sync::Arc;\n" +
+        "use deadpool_postgres::Pool;\n\n" +
+        "pub static STATEMENTS: phf::Map<&'static str, &'static str> = phf::phf_map! {};\n\n" +
+        "pub fn register_handles(_pool: Arc<Pool>) -> crate::aot::handles::HandleRegistry {\n" +
+        "    crate::aot::handles::HandleRegistry::new()\n" +
+        "}\n"
+    );
+  }
+
   console.log(formatBuildReport(result));
   console.log("");
   console.log(`Wrote: ${handlersPath}`);
   console.log(`Wrote: ${manifestPath}`);
+  console.log(`Wrote: ${registryInitPath}`);
 
   if (!args.runCargo) {
     console.log("\nSkipped cargo build (--no-cargo).");

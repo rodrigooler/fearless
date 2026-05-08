@@ -42,3 +42,7 @@ export type {
   ErrorHook,
   ResponseBody,
 } from "./types.js";
+
+// Phase 1.2: tagged template + handle namespace consumed by the AOT pipeline.
+export { sql, fearless } from "./sql.js";
+export type { SqlQuery, SqlHandle, SqlRow, FearlessNamespace } from "./sql.js";

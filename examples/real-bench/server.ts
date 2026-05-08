@@ -28,8 +28,15 @@
  *      wrk http://localhost:8080/json     # AOT — millions/sec
  *      wrk http://localhost:8081/db        # Bun — limited by Postgres
  */
-import { App, HttpError } from "../../src/index.js";
+import { App, HttpError, fearless, sql } from "../../src/index.js";
 import { createHash } from "node:crypto";
+
+// Phase 1.2: declare a typed Postgres handle. The AOT pipeline maps this
+// declaration to the rust-core `HandleRegistry`, keyed by "primary" and
+// configured at startup via the `FEARLESS_SQL_PRIMARY` env var. At runtime
+// under Bun this `db` is a stub — the /db handler below is AOT-eligible and
+// runs natively in Rust against the real Postgres pool.
+const db = fearless.sql("primary");
 
 // ----------------------------------------------------------------------------
 // Postgres setup — Bun has built-in `Bun.sql` from 1.2+; on Node we'd use pg.
@@ -128,19 +135,25 @@ app.get("/access", (ctx) => {
   return ctx.status(401).json({ error: "denied" });
 });
 
-// === Bun-fallback routes (real-world async / CPU-bound work) ===
-
-// TFB single query: pick one row from `world` by random id.
-app.get("/db", async () => {
-  const client = await getPgClient();
-  const id = 1 + Math.floor(Math.random() * 10000);
-  const result = await client.query("SELECT id, randomnumber FROM world WHERE id = $1", [id]);
-  const row = result.rows[0];
-  if (row == null) throw HttpError.notFound();
-  return new Response(JSON.stringify({ id: row.id, randomNumber: row.randomNumber }), {
-    headers: { "Content-Type": "application/json" },
-  });
+// === AOT-eligible async route: TFB single query via the typed handle ===
+//
+// Phase 1.2 MVP supports a single `await <handle>.<method>(sql\`...\`)` per
+// handler with bind params restricted to `ctx.params.X` / `ctx.query.X`. The
+// handler below uses no bind params (Postgres-side `random()`), which keeps
+// the demo within those limits while still exercising the full async path:
+// io_uring → tokio bridge → deadpool-postgres → prepared statement.
+//
+// Computed bind params (e.g. `Math.floor(Math.random()*N)`) are a Phase 1.3
+// follow-up; they would let us match the canonical TFB indexed-id lookup.
+app.get("/db", async (ctx) => {
+  const row = await db.queryOne(
+    sql`SELECT id, randomnumber FROM world ORDER BY random() LIMIT 1`
+  );
+  if (row == null) return ctx.notFound();
+  return ctx.json({ id: row.id, randomNumber: row.randomnumber });
 });
+
+// === Bun-fallback routes (real-world async / CPU-bound work) ===
 
 // TFB multi-query: N parallel queries, return array.
 app.get("/queries", async (ctx) => {

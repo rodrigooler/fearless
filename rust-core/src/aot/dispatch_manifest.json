@@ -32,7 +32,8 @@
   {
     "method": "GET",
     "path": "/db",
-    "kind": "bun"
+    "kind": "aot",
+    "fnName": "handler_5__db"
   },
   {
     "method": "GET",

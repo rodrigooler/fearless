@@ -103,10 +103,12 @@ SQL
   sh("node scripts/fearless-build.mjs examples/real-bench/server.ts --no-cargo >/dev/null");
 
   console.log(grey("setup: build rust-core docker image..."));
-  sh("docker build -f bench/techempower/fearless-rust-aot.dockerfile -t fearless-rust:bench . 2>&1 | tail -1");
+  // Single shared tag — `fearless-rust-aot:dev`. Manual smoke runs and the
+  // bench harness reuse this image so we don't accumulate image variants.
+  sh("docker build -f bench/techempower/fearless-rust-aot.dockerfile -t fearless-rust-aot:dev . 2>&1 | tail -1");
 
   console.log(grey("setup: start rust-core container (8080)..."));
-  sh("docker run -d --name fearless-aot --ulimit memlock=-1 --cap-add SYS_NICE --cap-add NET_ADMIN --security-opt seccomp=unconfined -p 8080:8080 -e FEARLESS_SQL_PRIMARY=postgres://postgres:pw@host.docker.internal:5432/postgres -e FEARLESS_SQL_PRIMARY_POOL_SIZE=64 fearless-rust:bench >/dev/null");
+  sh("docker run -d --name fearless-aot --ulimit memlock=-1 --cap-add SYS_NICE --cap-add NET_ADMIN --security-opt seccomp=unconfined -p 8080:8080 -e FEARLESS_SQL_PRIMARY=postgres://postgres:pw@host.docker.internal:5432/postgres -e FEARLESS_SQL_PRIMARY_POOL_SIZE=64 fearless-rust-aot:dev >/dev/null");
   sh("sleep 2");
 
   console.log(grey("setup: start Bun server (8081)..."));
@@ -130,12 +132,15 @@ EOF"`);
   console.log(grey("setup: smoke checks..."));
   const aotSmoke = sh("docker exec wrk-runner curl -s http://127.0.0.1:8080/plaintext").trim();
   const bunSmoke = sh("docker exec wrk-runner curl -s http://127.0.0.1:8081/plaintext").trim();
-  const dbSmoke = sh("docker exec wrk-runner curl -s http://127.0.0.1:8081/db").trim();
   const aotDbSmoke = sh("docker exec wrk-runner curl -s http://127.0.0.1:8080/db").trim();
   if (aotSmoke !== "Hello, World!") throw new Error(`AOT smoke failed: ${aotSmoke}`);
   if (bunSmoke !== "Hello, World!") throw new Error(`Bun smoke failed: ${bunSmoke}`);
-  if (!dbSmoke.includes("id")) throw new Error(`DB smoke failed: ${dbSmoke}`);
   if (!aotDbSmoke.includes("id")) throw new Error(`AOT /db smoke failed: ${aotDbSmoke}`);
+  // NOTE: Bun-side /db smoke removed — Phase 1.2 routes /db through the AOT
+  // pipeline (`db.queryOne(sql\`...\`)`). The Bun fallback has no adapter for
+  // the `fearless.sql(...)` handle yet (Phase 1.3+); calling it on Bun would
+  // hit the runtime stub and throw. The /queries route still uses the legacy
+  // Bun-side `getPgClient()` and is exercised separately by its bench scenario.
   console.log(grey("setup: ✓ ready"));
 }
 
