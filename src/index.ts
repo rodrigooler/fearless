@@ -29,3 +29,14 @@ export type {
 } from "./rust-core.js";
 export type { CorsOptions } from "./dependencies/index.js";
 export type { SecurityHeadersOptions } from "./dependencies/index.js";
+
+// Functional handler API
+export { HttpError, ValidationError } from "./errors.js";
+export type {
+  Ctx,
+  Handler,
+  RequestHook,
+  ResponseHook,
+  ErrorHook,
+  ResponseBody,
+} from "./types.js";
