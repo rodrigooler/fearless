@@ -17,6 +17,10 @@ export interface EmitAsyncHandlerOutput {
   readonly rustSource?: string;
   readonly functionName?: string;
   readonly statements?: ReadonlyMap<string, string>;
+  /** The `registeredName` values (e.g. "primary") for all handles used in this handler.
+   * Distinct from the statement key prefix (which uses `variableName`). The build pipeline
+   * uses these to call `register_handles` with the correct registry key. */
+  readonly registeredHandleNames?: ReadonlySet<string>;
   readonly error?: string;
 }
 
@@ -82,6 +86,7 @@ ${bodyResult.code}
     rustSource,
     functionName: fnName,
     statements,
+    registeredHandleNames: new Set([handle.registeredName]),
   };
 }
 

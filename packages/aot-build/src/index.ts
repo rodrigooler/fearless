@@ -1,6 +1,10 @@
 import ts from "typescript";
 import { analyzeHandler, type AnalysisResult } from "@fearless/aot-analyzer";
 import { transpileHandler, type HttpMethod, type TranspileResult } from "@fearless/aot-transpiler";
+import { collectSql, emitRegistryInitRust } from "./sql-collection.js";
+
+export { collectSql, emitRegistryInitRust } from "./sql-collection.js";
+export type { CollectedSql } from "./sql-collection.js";
 
 export interface CompileAppOptions {
   /** Source code of the user's app entry file. */
@@ -51,6 +55,12 @@ export interface CompileAppResult {
     readonly bun: number;
     readonly template: number;
   };
+  /**
+   * Generated Rust source for `rust-core/src/aot/registry_init.rs`.
+   * Contains a `STATEMENTS` phf map and a `register_handles(pool)` function.
+   * Empty string when there are no async SQL handlers.
+   */
+  readonly registryRustSource: string;
 }
 
 export interface DispatchEntry {
@@ -203,11 +213,19 @@ export function compileApp(options: CompileAppOptions): CompileAppResult {
     template: routes.filter((r) => r.kind === "template").length,
   };
 
+  // Collect SQL statements from all AOT async handlers and emit the Rust registry init.
+  const aotAsyncRoutes = routes
+    .filter((r): r is DiscoveredRoute & { kind: "aot" } => r.kind === "aot")
+    .filter((r) => r.transpile.kind === "async");
+  const collected = collectSql(aotAsyncRoutes);
+  const registryRustSource = emitRegistryInitRust(collected);
+
   return {
     routes,
     rustSource: rustChunks.join("\n"),
     dispatchManifest,
     summary,
+    registryRustSource,
   };
 }
 

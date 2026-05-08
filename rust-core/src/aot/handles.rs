@@ -8,6 +8,7 @@
 #![cfg(feature = "pg-handles")]
 
 use deadpool_postgres::Pool;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::Row;
@@ -42,6 +43,41 @@ impl std::fmt::Display for HandleError {
 }
 
 impl std::error::Error for HandleError {}
+
+/// Registry of named handles keyed by `registeredName` (e.g. `"primary"`).
+/// The build generates a `register_handles(pool)` function that populates this
+/// at startup; generated async handlers receive it as `&HandleRegistry`.
+pub struct HandleRegistry {
+    pub sql: HashMap<&'static str, Arc<SqlHandle>>,
+    // Future: kv: HashMap<...>, http: HashMap<...>
+}
+
+impl HandleRegistry {
+    pub fn new() -> Self {
+        Self { sql: HashMap::new() }
+    }
+
+    /// Register a SQL handle under its `registeredName`. Called from the
+    /// build-generated `register_handles` function.
+    pub fn register_sql(&mut self, name: &'static str, handle: Arc<SqlHandle>) {
+        self.sql.insert(name, handle);
+    }
+
+    /// Eagerly prepare every statement in every registered SQL handle. Call
+    /// once at startup after pool init to avoid first-request prepare latency.
+    pub async fn prepare_all(&self) -> Result<(), HandleError> {
+        for handle in self.sql.values() {
+            handle.prepare_all().await?;
+        }
+        Ok(())
+    }
+}
+
+impl Default for HandleRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Typed Postgres handle. The TS-side `fearless.sql("primary")` declaration
 /// resolves at startup to one of these, configured via `FEARLESS_SQL_PRIMARY`

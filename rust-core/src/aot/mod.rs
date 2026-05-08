@@ -21,4 +21,10 @@ pub mod db_handler;
 #[cfg(feature = "pg-handles")]
 pub mod handles;
 
+/// Build-generated: STATEMENTS phf map + register_handles() constructor.
+/// Only present when the app was compiled with `fearless build` and at least
+/// one async SQL handler was discovered.
+#[cfg(all(feature = "pg-handles", feature = "aot-handlers"))]
+pub mod registry_init;
+
 pub use dispatch::{AotHandlerFn, AotRoute, AotRouteTable, RouteSegment};

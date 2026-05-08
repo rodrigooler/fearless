@@ -45,6 +45,13 @@ export interface TranspileResult {
    * each async handler looks statements up in by key.
    */
   readonly statements: ReadonlyMap<string, string>;
+  /**
+   * The `registeredName` values (e.g. `"primary"`) for every SQL handle used
+   * in this handler. Empty set for sync handlers. Note: statement keys use the
+   * `variableName` prefix (e.g. `db_<hash>`), but registry lookups use
+   * `registeredName` — the build pipeline needs both.
+   */
+  readonly registeredHandleNames: ReadonlySet<string>;
 }
 
 /**

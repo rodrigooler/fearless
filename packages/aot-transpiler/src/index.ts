@@ -62,6 +62,7 @@ export function transpileHandler(options: TranspileOptions): TranspileOutcome {
       path: options.path,
       kind: "async",
       statements: asyncOut.statements!,
+      registeredHandleNames: asyncOut.registeredHandleNames!,
     };
     return { success: true, result };
   }
@@ -103,6 +104,7 @@ export function transpileHandler(options: TranspileOptions): TranspileOutcome {
     path: options.path,
     kind: "sync",
     statements: new Map(),
+    registeredHandleNames: new Set(),
   };
   return { success: true, result };
 }
