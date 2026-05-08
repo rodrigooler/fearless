@@ -1,0 +1,60 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "$comment": "Recommended config for users of the Fearless framework. Drop this into your project as .oxlintrc.json (or extend it). Rules favor patterns that AOT-compile cleanly to Rust.",
+  "ignorePatterns": [
+    "dist",
+    "build",
+    "node_modules",
+    "rust-core/target",
+    "**/*.generated.*"
+  ],
+  "categories": {
+    "correctness": "warn",
+    "perf": "warn",
+    "suspicious": "warn"
+  },
+  "rules": {
+    "$comment_typesafe": "Strict typing — required for AOT analysis to be predictable",
+    "no-explicit-any": "warn",
+    "no-unsafe-finally": "error",
+    "no-unsafe-negation": "error",
+    "no-unsafe-optional-chaining": "error",
+    "prefer-const": "error",
+    "no-var": "error",
+    "eqeqeq": ["error", "smart"],
+
+    "$comment_aot_friendly": "Patterns that play well with the AOT analyzer",
+    "no-eval": "error",
+    "no-implied-eval": "error",
+    "no-new-func": "error",
+    "no-with": "error",
+    "no-extend-native": "error",
+    "no-self-compare": "error",
+    "no-template-curly-in-string": "warn",
+
+    "$comment_consistency": "Consistency rules — surface drift early",
+    "no-useless-rename": "warn",
+    "no-useless-return": "warn",
+    "no-useless-concat": "warn",
+    "no-array-constructor": "warn",
+    "no-new-wrappers": "warn",
+    "no-floating-promises": "warn",
+    "require-await": "warn",
+    "no-useless-fallback-in-spread": "off"
+  },
+  "overrides": [
+    {
+      "files": ["test/**/*.ts", "tests/**/*.ts", "**/*.test.ts", "**/*.spec.ts"],
+      "rules": {
+        "no-floating-promises": "off",
+        "no-explicit-any": "warn"
+      }
+    },
+    {
+      "files": ["scripts/**/*.{ts,mjs,js}"],
+      "rules": {
+        "no-floating-promises": "warn"
+      }
+    }
+  ]
+}
