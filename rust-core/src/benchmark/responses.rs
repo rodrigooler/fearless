@@ -119,6 +119,11 @@ fn render(status: &str, content_type: &str, body: &[u8], date: &[u8; DATE_LEN], 
 pub struct BenchmarkServer {
     pub responses: Arc<BenchmarkResponses>,
     pub clock: Arc<DateClock>,
+    /// Optional AOT-compiled handler table. When `None`, the dispatcher
+    /// short-circuits — no extra work per request. When `Some`, requests that
+    /// don't match the benchmark fast path get a route lookup before falling
+    /// back to 404. Populated by `with_aot_table`.
+    pub aot_table: Option<Arc<crate::aot::AotRouteTable>>,
 }
 
 impl BenchmarkServer {
@@ -138,7 +143,15 @@ impl BenchmarkServer {
                 r.refresh(&c.snapshot());
             })
             .expect("spawn refresher");
-        Self { responses, clock }
+        Self { responses, clock, aot_table: None }
+    }
+
+    /// Builder: attach an AOT route table. Call this once at startup before
+    /// spawning workers; the table itself is shared via Arc so all workers
+    /// share the same lookup data.
+    pub fn with_aot_table(mut self, table: Arc<crate::aot::AotRouteTable>) -> Self {
+        self.aot_table = Some(table);
+        self
     }
 }
 

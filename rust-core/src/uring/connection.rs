@@ -1,12 +1,19 @@
+use crate::aot::runtime::AotRequest;
 use crate::benchmark::parser::{parse_pipeline, Classification, Route};
 use crate::benchmark::responses::{BenchmarkServer, Variant};
 use crate::uring::buffers::{Slot, READ_REGION_BYTES, WRITE_REGION_BYTES};
 use io_uring::{opcode, types::Fd, IoUring};
+use rustc_hash::FxHashMap;
+use std::collections::HashMap;
 use std::io;
 use std::os::fd::RawFd;
 use std::sync::Arc;
 
 const MAX_PIPELINE: usize = 64;
+/// Pre-allocated capacity for the per-Connection scratch buffer used to capture
+/// AOT handler output before copying into the write region. 4 KiB covers the
+/// typical AOT response (~50-500 B) with headroom; grows on demand.
+const AOT_SCRATCH_CAPACITY: usize = 4096;
 
 pub struct Connection {
     fd: RawFd,
@@ -17,6 +24,9 @@ pub struct Connection {
     write_offset: usize,
     state: State,
     close_after_drain: bool,
+    /// Reused scratch buffer for AOT handler output. Cleared per-call,
+    /// never freed across requests on this connection.
+    aot_scratch: Vec<u8>,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -36,6 +46,7 @@ impl Connection {
             write_offset: 0,
             state: State::Reading,
             close_after_drain: false,
+            aot_scratch: Vec::with_capacity(AOT_SCRATCH_CAPACITY),
         }
     }
 
@@ -122,7 +133,7 @@ impl Connection {
     fn process_buffered(&mut self, ring: &mut IoUring, token: u64) -> io::Result<bool> {
         let snap = self.server.responses.snapshot();
         let mut classifications =
-            [Classification { route: Route::NotFound, close: false }; MAX_PIPELINE];
+            [Classification { route: Route::NotFound, close: false, request_len: 0 }; MAX_PIPELINE];
         let result = {
             let read_slice =
                 unsafe { std::slice::from_raw_parts(self.slot.read_ptr, self.read_filled) };
@@ -142,51 +153,92 @@ impl Connection {
 
         let mut close_after = false;
         let mut classified_consumed: usize = 0;
-        {
-            let write_slice = unsafe {
-                std::slice::from_raw_parts_mut(self.slot.write_ptr, WRITE_REGION_BYTES)
-            };
-            for (i, cls) in classifications[..result.count].iter().enumerate() {
-                // Borrowed slice — no Arc::clone per response. `snap` (Arc<BakedResponses>)
-                // anchors the underlying memory for the entire process_buffered call.
-                let bytes: &[u8] = snap.get_ref(variant_for(*cls));
-                if self.write_filled + bytes.len() > WRITE_REGION_BYTES {
-                    // This response would overflow the write buffer — flush what we have and
-                    // leave the rest of the parsed batch in the read buffer for the next round.
-                    if i == 0 {
-                        // Single response larger than WRITE_REGION_BYTES — should be impossible with
-                        // current baked responses (~140B), but guard anyway.
-                        self.close();
-                        return Ok(false);
+        let mut bytes_consumed: usize = 0;
+        let aot_table = self.server.aot_table.clone();
+
+        for (i, cls) in classifications[..result.count].iter().enumerate() {
+            let request_start = bytes_consumed;
+            let request_end = request_start + cls.request_len as usize;
+
+            // Three dispatch paths in priority order:
+            //   1. Benchmark fast path — Plaintext/Json: pre-baked bytes from snap
+            //   2. AOT path — only if NotFound AND aot_table present: parse + handler
+            //   3. NotFound fallback — pre-baked 404 from snap
+            let written = match cls.route {
+                Route::Plaintext | Route::Json => {
+                    // Existing benchmark hot path. `snap` keeps the Arc alive for this fn.
+                    let bytes = snap.get_ref(variant_for(*cls));
+                    if self.write_filled + bytes.len() > WRITE_REGION_BYTES {
+                        if i == 0 {
+                            self.close();
+                            return Ok(false);
+                        }
+                        break;
                     }
-                    break;
+                    let write_slice = unsafe {
+                        std::slice::from_raw_parts_mut(self.slot.write_ptr, WRITE_REGION_BYTES)
+                    };
+                    write_slice[self.write_filled..self.write_filled + bytes.len()]
+                        .copy_from_slice(bytes);
+                    bytes.len()
                 }
-                write_slice[self.write_filled..self.write_filled + bytes.len()]
-                    .copy_from_slice(bytes);
-                self.write_filled += bytes.len();
-                classified_consumed += 1;
-                if cls.close {
-                    close_after = true;
-                    break;
+                Route::NotFound => {
+                    // Try AOT lookup first (only if any AOT routes are registered).
+                    let aot_written = if let Some(table) = aot_table.as_ref() {
+                        let request_bytes = unsafe {
+                            std::slice::from_raw_parts(
+                                self.slot.read_ptr.add(request_start),
+                                cls.request_len as usize,
+                            )
+                        };
+                        Self::try_aot_dispatch(
+                            table,
+                            request_bytes,
+                            &mut self.aot_scratch,
+                            self.slot.write_ptr,
+                            self.write_filled,
+                        )
+                    } else {
+                        None
+                    };
+
+                    if let Some(n) = aot_written {
+                        n
+                    } else {
+                        // No AOT match — write the pre-baked 404.
+                        let bytes = snap.get_ref(variant_for(*cls));
+                        if self.write_filled + bytes.len() > WRITE_REGION_BYTES {
+                            if i == 0 {
+                                self.close();
+                                return Ok(false);
+                            }
+                            break;
+                        }
+                        let write_slice = unsafe {
+                            std::slice::from_raw_parts_mut(
+                                self.slot.write_ptr,
+                                WRITE_REGION_BYTES,
+                            )
+                        };
+                        write_slice[self.write_filled..self.write_filled + bytes.len()]
+                            .copy_from_slice(bytes);
+                        bytes.len()
+                    }
                 }
+            };
+
+            self.write_filled += written;
+            classified_consumed += 1;
+            bytes_consumed = request_end;
+            if cls.close {
+                close_after = true;
+                break;
             }
         }
 
-        // Compute how many input bytes we actually consumed by re-walking the parser output we used.
-        // Each classification consumed `request_len` bytes; parse_pipeline already returned the
-        // total `consumed` for ALL classifications. We need the prefix consumption for the ones we
-        // actually copied to the write buffer.
-        let consumed = if classified_consumed == result.count {
-            result.consumed
-        } else {
-            // Re-parse just the prefix we used to find its byte count. Cheaper than carrying
-            // per-request offsets through parse_pipeline.
-            let read_slice =
-                unsafe { std::slice::from_raw_parts(self.slot.read_ptr, self.read_filled) };
-            let mut tmp = [Classification { route: Route::NotFound, close: false }; MAX_PIPELINE];
-            let prefix_result = parse_pipeline(read_slice, &mut tmp[..classified_consumed]);
-            prefix_result.consumed
-        };
+        // Bytes consumed is now precise — comes directly from the per-request request_len
+        // accumulated in the loop above. No re-parse needed.
+        let consumed = bytes_consumed;
 
         // Compact read region. Use ptr::copy (memmove semantics — handles overlap) since we only
         // hold raw pointers into the slot, not a slice we could call copy_within on.
@@ -210,6 +262,93 @@ impl Connection {
             libc::close(self.fd);
         }
     }
+
+    /// Try to dispatch a request through the AOT table. Returns:
+    ///   - `Some(bytes_written)` on a successful AOT handler call (response copied into write region)
+    ///   - `None` if no route matches, the request line can't be parsed, or the response
+    ///     would overflow the write region. The caller falls back to the 404 path on `None`.
+    ///
+    /// `request_bytes` is the full HTTP request (line + headers + `\r\n\r\n`).
+    /// `scratch` is a per-Connection Vec used to capture handler output before copying into
+    /// the write region. Cleared on entry; never freed.
+    fn try_aot_dispatch(
+        table: &crate::aot::AotRouteTable,
+        request_bytes: &[u8],
+        scratch: &mut Vec<u8>,
+        write_ptr: *mut u8,
+        write_filled: usize,
+    ) -> Option<usize> {
+        let (method, path) = parse_method_path(request_bytes)?;
+        let (handler, params) = table.lookup(method, path)?;
+
+        // Convert FxHashMap → std::HashMap for the runtime contract.
+        // (The contract uses std::HashMap so generated code doesn't need to know about FxHashMap.)
+        let std_params: HashMap<String, String> = params.into_iter().collect();
+        let empty: HashMap<String, String> = HashMap::new();
+
+        // Strip query string from path for AotRequest.path. Keep ctx.url with query.
+        let (clean_path, _query_str) = match path.find('?') {
+            Some(q) => (&path[..q], &path[q + 1..]),
+            None => (path, ""),
+        };
+
+        let req = AotRequest {
+            method,
+            path: clean_path,
+            url: path,
+            ip: "",
+            params: &std_params,
+            query: &empty,
+            headers: &empty,
+        };
+
+        scratch.clear();
+        handler(&req, scratch);
+
+        let n = scratch.len();
+        if write_filled + n > WRITE_REGION_BYTES {
+            return None;
+        }
+        unsafe {
+            let dst = write_ptr.add(write_filled);
+            std::ptr::copy_nonoverlapping(scratch.as_ptr(), dst, n);
+        }
+        Some(n)
+    }
+}
+
+/// Parse the request line of an HTTP request. Returns `(method, path)`.
+/// Path includes any query string. Returns None on malformed input.
+///
+/// The path is interned as a `&'static str` only if it survives the lifetime of
+/// `request_bytes` — but here we return references into the input slice. The
+/// caller (try_aot_dispatch) holds the bytes alive for the call duration.
+#[inline]
+fn parse_method_path(request_bytes: &[u8]) -> Option<(&str, &str)> {
+    // Find first space (end of method).
+    let space1 = memchr::memchr(b' ', request_bytes)?;
+    let method = std::str::from_utf8(&request_bytes[..space1]).ok()?;
+
+    let after_method = &request_bytes[space1 + 1..];
+    // Find next space (end of path / start of HTTP version).
+    let space2 = memchr::memchr(b' ', after_method)?;
+    let path = std::str::from_utf8(&after_method[..space2]).ok()?;
+
+    Some((method, path))
+}
+
+#[allow(dead_code)]
+fn _aot_table_compile_check(t: &crate::aot::AotRouteTable) -> Option<&str> {
+    let _ = t;
+    None
+}
+
+// Suppress the "unused import" warning for FxHashMap when only used via
+// the param map type alias inside try_aot_dispatch. Compiler should be smart
+// enough but leave this for safety on stricter check passes.
+#[allow(dead_code)]
+fn _fx_hashmap_anchor() -> Option<FxHashMap<String, String>> {
+    None
 }
 
 #[inline]
