@@ -15,4 +15,7 @@ pub mod runtime;
 #[cfg(feature = "aot-handlers")]
 pub mod handlers;
 
+#[cfg(feature = "pg-handles")]
+pub mod db_handler;
+
 pub use dispatch::{AotHandlerFn, AotRoute, AotRouteTable, RouteSegment};

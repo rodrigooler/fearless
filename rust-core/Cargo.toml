@@ -18,7 +18,9 @@ pg-handles = ["dep:tokio", "dep:tokio-postgres", "dep:deadpool-postgres", "dep:n
 
 [dependencies]
 arc-swap = "1.7"
+fastrand = "2"
 httpdate = "1"
+itoa = "1"
 libc = "0.2"
 memchr = "2"
 rustc-hash = "2"
