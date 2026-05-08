@@ -10,6 +10,9 @@ const ALLOWED_GLOBALS = new Set([
   "false",
   "Infinity",
   "NaN",
+  // Phase 1.2 fix: Math is allowed so that Math.floor(Math.random()*N)+M can be
+  // used as a bind param in sql template literals. The transpiler emits fastrand::i32.
+  "Math",
 ]);
 
 /**

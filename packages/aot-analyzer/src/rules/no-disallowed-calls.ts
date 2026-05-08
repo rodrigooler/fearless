@@ -95,6 +95,17 @@ export const noDisallowedCallsRule: Rule = ({ handler, typescript, ctxParamName,
         }
       }
 
+      // Allow Math.floor(...) and Math.random() — used in the approved
+      // `Math.floor(Math.random() * N) + M` bind-param pattern.
+      if (typescript.isPropertyAccessExpression(callee)) {
+        const obj = callee.expression;
+        const method = callee.name.text;
+        if (typescript.isIdentifier(obj) && obj.text === "Math" && (method === "floor" || method === "random")) {
+          node.arguments.forEach((arg) => visit(arg));
+          return;
+        }
+      }
+
       // Anything else: not a ctx call and not a handle call — block.
       const text = callee.getText(callee.getSourceFile());
       reasons.push({

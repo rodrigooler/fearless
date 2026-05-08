@@ -14,7 +14,49 @@ import { ALLOWED_CTX_INPUTS } from "../types.js";
 export const templateSubstitutionsRule: Rule = ({ handler, typescript, ctxParamName }) => {
   const reasons: Reason[] = [];
 
+  /**
+   * Returns true for `Math.floor(Math.random() * <num>) + <num>` and
+   * `Math.floor(Math.random() * <num>)` — Phase 1.2 fastrand bind-param pattern.
+   */
+  const isMathRandomPattern = (expr: import("typescript").Expression): boolean => {
+    // Unwrap optional `+ <numeric literal>` wrapper
+    let inner: import("typescript").Expression = expr;
+    if (
+      typescript.isBinaryExpression(expr) &&
+      expr.operatorToken.kind === typescript.SyntaxKind.PlusToken &&
+      typescript.isNumericLiteral(expr.right)
+    ) {
+      inner = expr.left;
+    }
+    // Must be Math.floor(<call>)
+    if (!typescript.isCallExpression(inner)) return false;
+    const floorCallee = inner.expression;
+    if (
+      !typescript.isPropertyAccessExpression(floorCallee) ||
+      !typescript.isIdentifier(floorCallee.expression) ||
+      floorCallee.expression.text !== "Math" ||
+      floorCallee.name.text !== "floor"
+    ) return false;
+    if (inner.arguments.length !== 1) return false;
+    const arg = inner.arguments[0]!;
+    // Arg must be `Math.random() * <numeric literal>`
+    if (!typescript.isBinaryExpression(arg)) return false;
+    if (arg.operatorToken.kind !== typescript.SyntaxKind.AsteriskToken) return false;
+    if (!typescript.isNumericLiteral(arg.right)) return false;
+    const randCallee = arg.left;
+    if (!typescript.isCallExpression(randCallee)) return false;
+    const randExpr = randCallee.expression;
+    return (
+      typescript.isPropertyAccessExpression(randExpr) &&
+      typescript.isIdentifier(randExpr.expression) &&
+      randExpr.expression.text === "Math" &&
+      randExpr.name.text === "random"
+    );
+  };
+
   const isAllowedSubstitution = (expr: import("typescript").Expression): boolean => {
+    // Math.floor(Math.random() * N) + M — emits fastrand::i32(low..=high) in Rust
+    if (isMathRandomPattern(expr)) return true;
     // ctx.X (single hop) — must be a leaf input on Ctx
     if (typescript.isPropertyAccessExpression(expr)) {
       const target = expr.expression;

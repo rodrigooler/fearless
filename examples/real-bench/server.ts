@@ -137,18 +137,11 @@ app.get("/access", (ctx) => {
 
 // === AOT-eligible async route: TFB single query via the typed handle ===
 //
-// Phase 1.2 MVP supports a single `await <handle>.<method>(sql\`...\`)` per
-// handler with bind params restricted to `ctx.params.X` / `ctx.query.X`. The
-// handler below uses no bind params (Postgres-side `random()`), which keeps
-// the demo within those limits while still exercising the full async path:
-// io_uring → tokio bridge → deadpool-postgres → prepared statement.
-//
-// Computed bind params (e.g. `Math.floor(Math.random()*N)`) are a Phase 1.3
-// follow-up; they would let us match the canonical TFB indexed-id lookup.
+// Phase 1.2 (fixed): uses indexed lookup WHERE id = $1 with fastrand::i32 on
+// the Rust side. The transpiler now recognises Math.floor(Math.random()*N)+M
+// and emits `let p1: i32 = fastrand::i32(1..=10000);` — no full table scan.
 app.get("/db", async (ctx) => {
-  const row = await db.queryOne(
-    sql`SELECT id, randomnumber FROM world ORDER BY random() LIMIT 1`
-  );
+  const row = await db.queryOne(sql`SELECT id, randomnumber FROM world WHERE id = ${Math.floor(Math.random() * 10000) + 1}`);
   if (row == null) return ctx.notFound();
   return ctx.json({ id: row.id, randomNumber: row.randomnumber });
 });

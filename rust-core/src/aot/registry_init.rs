@@ -6,7 +6,7 @@ use std::sync::Arc;
 use deadpool_postgres::Pool;
 
 pub static STATEMENTS: phf::Map<&'static str, &'static str> = phf::phf_map! {
-    "db_06ecb1bb" => "SELECT id, randomnumber FROM world ORDER BY random() LIMIT 1",
+    "db_544d347e" => "SELECT id, randomnumber FROM world WHERE id = $1",
 };
 
 pub fn register_handles(pool: Arc<Pool>) -> crate::aot::handles::HandleRegistry {

@@ -49,7 +49,8 @@ pub async fn handler_5__db(
     ctx: &crate::aot::runtime::AotRequest<'_>,
     handles: &crate::aot::handles::HandleRegistry,
 ) -> Vec<u8> {
-    let row = match handles.sql.get("primary").expect("sql handle primary not registered").query_one("db_06ecb1bb", &[]).await {
+    let p1: i32 = fastrand::i32(1..=10000);
+    let row = match handles.sql.get("primary").expect("sql handle primary not registered").query_one("db_544d347e", &[&p1]).await {
         Ok(Some(r)) => r,
         Ok(None) => return crate::aot::runtime::not_found_response(),
         Err(_) => return crate::aot::runtime::error_response(503, b"database error"),

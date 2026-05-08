@@ -174,6 +174,34 @@ test("statement key is stable across calls", () => {
 // Backward compat: sync handlers still produce kind: "sync" with empty statements
 // ============================================================================
 
+// ============================================================================
+// Math.random bind param pattern → fastrand::i32
+// ============================================================================
+
+test("supports Math.random bind param pattern", () => {
+  const source = `
+    import { fearless } from "fearless";
+    const db = fearless.sql("primary");
+    const handler = async (ctx: any) => {
+      const row = await db.queryOne(sql\`SELECT id, randomnumber FROM world WHERE id = \${Math.floor(Math.random() * 10000) + 1}\`);
+      if (row == null) return ctx.notFound();
+      return ctx.json({ id: row.id, randomNumber: row.randomnumber });
+    };
+  `;
+  const { source: sf, handler, handles } = setup(source);
+  const result = transpileHandler({
+    handler,
+    source: sf,
+    discoveredHandles: handles,
+    id: "db",
+    method: "GET",
+    path: "/db",
+  });
+  if (!result.success) throw new Error(`expected success, got: ${result.error}`);
+  assert.equal(result.result.kind, "async");
+  assert.ok(result.result.rustSource.includes("fastrand::i32(1..=10000)"), `rustSource should contain fastrand::i32(1..=10000), got:\n${result.result.rustSource}`);
+});
+
 test("sync handler still works and reports kind: sync", () => {
   const source = `const handler = (ctx: any) => ctx.json({ ok: true });`;
   const { source: sf, handler } = setup(source);

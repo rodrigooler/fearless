@@ -299,7 +299,8 @@ interface ParamTranslation {
 /**
  * Translate a TS bind-param expression source string (e.g. "ctx.params.id")
  * into a Rust statement that binds it to `<rustVar>` as `i32`. Bails on
- * anything outside `ctx.params.X` / `ctx.query.X`.
+ * anything outside `ctx.params.X`, `ctx.query.X`, or
+ * `Math.floor(Math.random() * N) + offset`.
  */
 function translateParamExpression(expr: string, rustVar: string): ParamTranslation {
   const paramMatch = expr.match(/^ctx\.params\.(\w+)$/);
@@ -318,9 +319,22 @@ function translateParamExpression(expr: string, rustVar: string): ParamTranslati
       code: `let ${rustVar}: i32 = match ctx.query.get(${rustString(name)}).and_then(|s| s.parse().ok()) { Some(v) => v, None => return crate::aot::runtime::error_response(400, b"invalid query param"), };`,
     };
   }
+  // Pattern: Math.floor(Math.random() * NUM) + OFFSET  (OFFSET optional)
+  // Emits: fastrand::i32(low..=high)
+  const randIntMatch = expr.match(/^Math\.floor\(Math\.random\(\)\s*\*\s*(\d+)\)(?:\s*\+\s*(\d+))?$/);
+  if (randIntMatch != null) {
+    const range = parseInt(randIntMatch[1]!, 10);
+    const offset = randIntMatch[2] != null ? parseInt(randIntMatch[2], 10) : 0;
+    const low = offset;
+    const high = range + offset - 1;
+    return {
+      success: true,
+      code: `let ${rustVar}: i32 = fastrand::i32(${low}..=${high});`,
+    };
+  }
   return {
     success: false,
-    error: `unsupported bind param expression: ${expr}. Only ctx.params.X and ctx.query.X are supported in Phase 1.2.`,
+    error: `unsupported bind param expression: ${expr}. Only ctx.params.X, ctx.query.X, and Math.floor(Math.random() * N) + offset are supported in Phase 1.2.`,
   };
 }
 
