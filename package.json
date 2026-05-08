@@ -44,7 +44,10 @@
     "test:js": "node --import tsx --test",
     "test:rust": "cargo test --manifest-path rust-core/Cargo.toml --no-run",
     "test": "npm run test:js && npm run test:rust",
-    "bench:tfb": "node ./scripts/bench-tfb.mjs"
+    "bench:tfb": "node ./scripts/bench-tfb.mjs",
+    "bench:track": "node ./scripts/run-bench.mjs",
+    "bench:track:quick": "node ./scripts/run-bench.mjs --quick",
+    "bench:compare": "node ./scripts/compare-bench.mjs"
   },
   "keywords": [
     "microframework",

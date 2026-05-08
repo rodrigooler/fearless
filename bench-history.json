@@ -1,0 +1,309 @@
+{
+  "schema": "fearless-bench-history-v1",
+  "runs": [
+    {
+      "label": "step1+step2+realbench-baseline",
+      "timestamp": "2026-05-08T14:43:32.621Z",
+      "git": {
+        "sha": "32203b4",
+        "message": "feat(bench): real-world benchmark suite — AOT vs Bun + Postgres + CPU bound",
+        "dirty": true
+      },
+      "note": "first run after Step 1 templates lifted + real-bench suite",
+      "rig": {
+        "host": "darwin",
+        "node": "v24.11.1"
+      },
+      "scenarios": {
+        "aot/plaintext-c64": {
+          "description": "AOT /plaintext c=64",
+          "rps": 416278.6,
+          "p50_ms": 0.124,
+          "p99_ms": 1.26,
+          "non2xx": 0,
+          "completed": 4204182
+        },
+        "aot/json-c64": {
+          "description": "AOT /json c=64",
+          "rps": 437702.01,
+          "p50_ms": 0.12,
+          "p99_ms": 1.21,
+          "non2xx": 0,
+          "completed": 4420754
+        },
+        "aot/echo-c64": {
+          "description": "AOT /echo c=64",
+          "rps": 426409.1,
+          "p50_ms": 0.125,
+          "p99_ms": 1.15,
+          "non2xx": 0,
+          "completed": 4306491
+        },
+        "aot/config-c64": {
+          "description": "AOT /config c=64",
+          "rps": 413828.27,
+          "p50_ms": 0.126,
+          "p99_ms": 1.25,
+          "non2xx": 0,
+          "completed": 4179469
+        },
+        "aot/access-c64": {
+          "description": "AOT /access c=64 (header cond)",
+          "rps": 386686.99,
+          "p50_ms": 0.145,
+          "p99_ms": 0.769,
+          "non2xx": 3905324,
+          "completed": 3905324
+        },
+        "aot/plaintext-pipe32": {
+          "description": "AOT /plaintext c=256 pipe-32",
+          "rps": 8476326.13,
+          "p50_ms": 0.522,
+          "p99_ms": 4.04,
+          "non2xx": 0,
+          "completed": 85071808
+        },
+        "aot/json-pipe32": {
+          "description": "AOT /json c=256 pipe-32",
+          "rps": 9430350.33,
+          "p50_ms": 0.457,
+          "p99_ms": 3.09,
+          "non2xx": 0,
+          "completed": 94508736
+        },
+        "aot/echo-pipe32": {
+          "description": "AOT /echo c=256 pipe-32",
+          "rps": 7440673.79,
+          "p50_ms": 0.548,
+          "p99_ms": 2.48,
+          "non2xx": 0,
+          "completed": 74490944
+        },
+        "bun/plaintext-c64": {
+          "description": "Bun /plaintext c=64",
+          "rps": 114560.63,
+          "p50_ms": 0.325,
+          "p99_ms": 197.05,
+          "non2xx": 0,
+          "completed": 1157047
+        },
+        "bun/json-c64": {
+          "description": "Bun /json c=64",
+          "rps": 114700.74,
+          "p50_ms": 0.323,
+          "p99_ms": 199.84,
+          "non2xx": 0,
+          "completed": 1158458
+        },
+        "bun/echo-c64": {
+          "description": "Bun /echo c=64",
+          "rps": 100330.03,
+          "p50_ms": 0.526,
+          "p99_ms": 192.8,
+          "non2xx": 0,
+          "completed": 1013376
+        },
+        "bun/db-c64": {
+          "description": "Bun /db (1 PG query)",
+          "rps": 44188.55,
+          "p50_ms": 1.03,
+          "p99_ms": 192.13,
+          "non2xx": 0,
+          "completed": 446315
+        },
+        "bun/queries-1-c64": {
+          "description": "Bun /queries?queries=1",
+          "rps": 44357.05,
+          "p50_ms": 1.1,
+          "p99_ms": 192.19,
+          "non2xx": 0,
+          "completed": 448003
+        },
+        "bun/queries-20-c64": {
+          "description": "Bun /queries?queries=20 (TFB std)",
+          "rps": 8594.94,
+          "p50_ms": 6.21,
+          "p99_ms": 200.99,
+          "non2xx": 0,
+          "completed": 86146
+        },
+        "bun/fib-10-c64": {
+          "description": "Bun /fib/10 (CPU trivial)",
+          "rps": 99350.05,
+          "p50_ms": 0.543,
+          "p99_ms": 183.02,
+          "non2xx": 0,
+          "completed": 1003396
+        },
+        "bun/fib-20-c64": {
+          "description": "Bun /fib/20 (CPU ~0.2ms)",
+          "rps": 26349.93,
+          "p50_ms": 2.22,
+          "p99_ms": 5.53,
+          "non2xx": 0,
+          "completed": 266178
+        },
+        "bun/hash-100-c64": {
+          "description": "Bun /hash/100 (SHA256 x100)",
+          "rps": 23421.82,
+          "p50_ms": 2.15,
+          "p99_ms": 12.82,
+          "non2xx": 0,
+          "completed": 234856
+        }
+      }
+    },
+    {
+      "label": "step1+step2-resample",
+      "timestamp": "2026-05-08T14:46:56.993Z",
+      "git": {
+        "sha": "32203b4",
+        "message": "feat(bench): real-world benchmark suite — AOT vs Bun + Postgres + CPU bound",
+        "dirty": true
+      },
+      "note": "second sample, demonstrate variance",
+      "rig": {
+        "host": "darwin",
+        "node": "v24.11.1"
+      },
+      "scenarios": {
+        "aot/plaintext-c64": {
+          "description": "AOT /plaintext c=64",
+          "rps": 417780.12,
+          "p50_ms": 0.13,
+          "p99_ms": 1.17,
+          "non2xx": 0,
+          "completed": 4219372
+        },
+        "aot/json-c64": {
+          "description": "AOT /json c=64",
+          "rps": 426550.41,
+          "p50_ms": 0.124,
+          "p99_ms": 1.27,
+          "non2xx": 0,
+          "completed": 4307922
+        },
+        "aot/echo-c64": {
+          "description": "AOT /echo c=64",
+          "rps": 420305.59,
+          "p50_ms": 0.127,
+          "p99_ms": 1.12,
+          "non2xx": 0,
+          "completed": 4245102
+        },
+        "aot/config-c64": {
+          "description": "AOT /config c=64",
+          "rps": 394459.58,
+          "p50_ms": 0.141,
+          "p99_ms": 1.02,
+          "non2xx": 0,
+          "completed": 3983970
+        },
+        "aot/access-c64": {
+          "description": "AOT /access c=64 (header cond)",
+          "rps": 392738.12,
+          "p50_ms": 0.136,
+          "p99_ms": 1.32,
+          "non2xx": 3966690,
+          "completed": 3966690
+        },
+        "aot/plaintext-pipe32": {
+          "description": "AOT /plaintext c=256 pipe-32",
+          "rps": 9389827.63,
+          "p50_ms": 0.446,
+          "p99_ms": 2.65,
+          "non2xx": 0,
+          "completed": 94036288
+        },
+        "aot/json-pipe32": {
+          "description": "AOT /json c=256 pipe-32",
+          "rps": 9833150.11,
+          "p50_ms": 0.428,
+          "p99_ms": 2.8,
+          "non2xx": 0,
+          "completed": 98499648
+        },
+        "aot/echo-pipe32": {
+          "description": "AOT /echo c=256 pipe-32",
+          "rps": 7511758.47,
+          "p50_ms": 0.538,
+          "p99_ms": 2.33,
+          "non2xx": 0,
+          "completed": 75207200
+        },
+        "bun/plaintext-c64": {
+          "description": "Bun /plaintext c=64",
+          "rps": 117019.48,
+          "p50_ms": 0.327,
+          "p99_ms": 197.02,
+          "non2xx": 0,
+          "completed": 1181845
+        },
+        "bun/json-c64": {
+          "description": "Bun /json c=64",
+          "rps": 113718.16,
+          "p50_ms": 0.324,
+          "p99_ms": 196.98,
+          "non2xx": 0,
+          "completed": 1148498
+        },
+        "bun/echo-c64": {
+          "description": "Bun /echo c=64",
+          "rps": 98521.47,
+          "p50_ms": 0.532,
+          "p99_ms": 184.08,
+          "non2xx": 0,
+          "completed": 995003
+        },
+        "bun/db-c64": {
+          "description": "Bun /db (1 PG query)",
+          "rps": 45388.3,
+          "p50_ms": 1.01,
+          "p99_ms": 191.31,
+          "non2xx": 0,
+          "completed": 458396
+        },
+        "bun/queries-1-c64": {
+          "description": "Bun /queries?queries=1",
+          "rps": 44332.25,
+          "p50_ms": 1.08,
+          "p99_ms": 190.89,
+          "non2xx": 0,
+          "completed": 447727
+        },
+        "bun/queries-20-c64": {
+          "description": "Bun /queries?queries=20 (TFB std)",
+          "rps": 7501.13,
+          "p50_ms": 6.48,
+          "p99_ms": 331.97,
+          "non2xx": 0,
+          "completed": 75307
+        },
+        "bun/fib-10-c64": {
+          "description": "Bun /fib/10 (CPU trivial)",
+          "rps": 101261.47,
+          "p50_ms": 0.547,
+          "p99_ms": 166.61,
+          "non2xx": 0,
+          "completed": 1022839
+        },
+        "bun/fib-20-c64": {
+          "description": "Bun /fib/20 (CPU ~0.2ms)",
+          "rps": 28463.85,
+          "p50_ms": 2.15,
+          "p99_ms": 4.31,
+          "non2xx": 0,
+          "completed": 287466
+        },
+        "bun/hash-100-c64": {
+          "description": "Bun /hash/100 (SHA256 x100)",
+          "rps": 28399.3,
+          "p50_ms": 2.03,
+          "p99_ms": 4.22,
+          "non2xx": 0,
+          "completed": 286838
+        }
+      }
+    }
+  ]
+}
