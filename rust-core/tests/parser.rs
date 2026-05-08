@@ -19,17 +19,11 @@ fn classifies_json_close() {
 }
 
 #[test]
-#[cfg(not(feature = "pg-handles"))]
-fn unknown_path_is_not_found() {
+fn db_path_is_not_found() {
+    // /db no longer has a fast-path classification — it reaches the AOT
+    // route table via the NotFound fallback in the dispatcher.
     let line = b"GET /db HTTP/1.1\r\n";
     assert_eq!(classify(line).route, Route::NotFound);
-}
-
-#[test]
-#[cfg(feature = "pg-handles")]
-fn db_path_classified_under_pg_handles() {
-    let line = b"GET /db HTTP/1.1\r\n";
-    assert_eq!(classify(line).route, Route::Db);
 }
 
 #[test]

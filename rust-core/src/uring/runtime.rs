@@ -35,13 +35,27 @@ pub fn run_with_aot(
         crate::runtime::async_bridge::init_runtime(worker_count);
         // Build the Postgres pool ONCE per process when the URL is set, then
         // attach it to BenchmarkServer so all workers share a single Arc<Pool>.
-        // Missing URL is non-fatal — /db routes will return 503.
+        // Missing URL is non-fatal — async PG routes will return 503.
         if std::env::var("FEARLESS_SQL_PRIMARY").is_ok() {
             let rt = crate::runtime::async_bridge::runtime();
             let pool = rt
                 .block_on(async { crate::runtime::pg_pool::build_primary_pool().await })
                 .map_err(|e| io::Error::other(format!("PG pool build failed: {e}")))?;
-            server_builder = server_builder.with_pg_pool(Arc::new(pool));
+            let pool_arc = Arc::new(pool);
+            server_builder = server_builder.with_pg_pool(pool_arc.clone());
+
+            // Build the handle registry ONLY when the build pipeline produced
+            // a `registry_init` module (gated on `aot-handlers`). Without that
+            // module there's nothing to register; async dispatch falls back to
+            // 503. `prepare_all` warms the prepared-statement cache so the
+            // first request avoids a Prepare round-trip.
+            #[cfg(feature = "aot-handlers")]
+            {
+                let registry = crate::aot::registry_init::register_handles(pool_arc.clone());
+                rt.block_on(async { registry.prepare_all().await })
+                    .map_err(|e| io::Error::other(format!("prepare_all failed: {e}")))?;
+                server_builder = server_builder.with_handle_registry(Arc::new(registry));
+            }
         }
     }
 

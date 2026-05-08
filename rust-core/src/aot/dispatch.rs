@@ -8,15 +8,57 @@
 //!   - `Static("users")` — must match literally
 //!   - `Param("id")` — matches any one segment, captured into the params map
 //!
+//! Handlers are split into two kinds via `HandlerKind`:
+//!   - `Sync(AotHandlerFn)` — runs inline on the io_uring worker, writing into
+//!     a borrowed scratch `Vec<u8>`. Cheap, no spawn, no clone.
+//!   - `Async(AotAsyncHandlerFn)` — receives owned request state and an
+//!     `Arc<HandleRegistry>`, returns a `Pin<Box<Future>>`. Spawned via the
+//!     async bridge so the io_uring loop can park the connection without
+//!     blocking other in-flight requests.
+//!
 //! The build pipeline (`fearless build`) generates a `register(table)` function
-//! in `aot/handlers.rs` that calls `table.add(...)` for each route. The
-//! framework calls `register` once at startup.
+//! in `aot/handlers.rs` that calls `table.add(...)` (sync) or `table.add_async(...)`
+//! (async, only when `pg-handles` is on) for each route.
 
 use crate::aot::runtime::AotRequest;
 use rustc_hash::FxHashMap;
+#[cfg(feature = "pg-handles")]
+use std::collections::HashMap;
+#[cfg(feature = "pg-handles")]
+use std::future::Future;
+#[cfg(feature = "pg-handles")]
+use std::pin::Pin;
+#[cfg(feature = "pg-handles")]
+use std::sync::Arc;
 
-/// Function pointer signature every generated AOT handler must conform to.
+/// Function pointer signature for sync AOT handlers. Runs inline on the
+/// io_uring worker thread; writes the response (status + headers + body) into
+/// the supplied scratch buffer.
 pub type AotHandlerFn = fn(&AotRequest, &mut Vec<u8>);
+
+/// Function pointer signature for async AOT handlers. Takes OWNED request
+/// state — the io_uring read buffer is reused immediately after spawn, so
+/// borrowing into it would be unsound across the await.
+///
+/// Cost of the owned-clone (params + query + headers): ~1µs for typical
+/// requests with a few small headers. Acceptable for non-benchmark routes;
+/// the hot benchmark path (plaintext/json) never reaches here.
+#[cfg(feature = "pg-handles")]
+pub type AotAsyncHandlerFn = fn(
+    method: String,
+    path: String,
+    params: HashMap<String, String>,
+    query: HashMap<String, String>,
+    headers: HashMap<String, String>,
+    handles: Arc<crate::aot::handles::HandleRegistry>,
+) -> Pin<Box<dyn Future<Output = Vec<u8>> + Send>>;
+
+/// Discriminates how a route's handler should be invoked.
+pub enum HandlerKind {
+    Sync(AotHandlerFn),
+    #[cfg(feature = "pg-handles")]
+    Async(AotAsyncHandlerFn),
+}
 
 /// One segment of a route path.
 #[derive(Debug, Clone)]
@@ -25,14 +67,13 @@ pub enum RouteSegment {
     Param(&'static str),
 }
 
-#[derive(Debug, Clone)]
 pub struct AotRoute {
     pub method: &'static str,
     pub segments: Vec<RouteSegment>,
-    pub handler: AotHandlerFn,
+    pub handler: HandlerKind,
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct AotRouteTable {
     routes: Vec<AotRoute>,
 }
@@ -42,22 +83,47 @@ impl AotRouteTable {
         Self::default()
     }
 
-    /// Register a route. `path` is split into segments; segments starting with
-    /// `:` are param captures. Method is the uppercase HTTP verb (`"GET"`).
+    /// Register a sync route. `path` is split into segments; segments starting
+    /// with `:` are param captures. Method is the uppercase HTTP verb (`"GET"`).
     pub fn add(&mut self, method: &'static str, path: &'static str, handler: AotHandlerFn) {
         let segments = parse_segments(path);
-        self.routes.push(AotRoute { method, segments, handler });
+        self.routes.push(AotRoute {
+            method,
+            segments,
+            handler: HandlerKind::Sync(handler),
+        });
     }
 
-    /// Look up a route. Returns the handler + captured params if found.
+    /// Register an async route. Only available when `pg-handles` is on; async
+    /// handlers spawn on the shared tokio runtime via the per-worker bridge.
+    #[cfg(feature = "pg-handles")]
+    pub fn add_async(
+        &mut self,
+        method: &'static str,
+        path: &'static str,
+        handler: AotAsyncHandlerFn,
+    ) {
+        let segments = parse_segments(path);
+        self.routes.push(AotRoute {
+            method,
+            segments,
+            handler: HandlerKind::Async(handler),
+        });
+    }
+
+    /// Look up a route. Returns `(handler kind, captured params)` if found.
     /// `params` is a fresh `FxHashMap` — caller decides whether to recycle it.
-    pub fn lookup(&self, method: &str, path: &str) -> Option<(AotHandlerFn, FxHashMap<String, String>)> {
+    pub fn lookup(
+        &self,
+        method: &str,
+        path: &str,
+    ) -> Option<(&HandlerKind, FxHashMap<String, String>)> {
         for route in &self.routes {
             if route.method != method {
                 continue;
             }
             if let Some(params) = match_segments(&route.segments, path) {
-                return Some((route.handler, params));
+                return Some((&route.handler, params));
             }
         }
         None
@@ -188,7 +254,15 @@ mod tests {
     fn handler_is_callable_after_lookup() {
         let mut table = AotRouteTable::new();
         table.add("GET", "/x", dummy_handler);
-        let (handler, _) = table.lookup("GET", "/x").unwrap();
+        let (kind, _) = table.lookup("GET", "/x").unwrap();
+        // `let ... else` would be irrefutable when `pg-handles` is off (only
+        // one variant exists); use `match` so the test compiles cleanly under
+        // both feature sets.
+        let handler = match kind {
+            HandlerKind::Sync(h) => h,
+            #[cfg(feature = "pg-handles")]
+            _ => panic!("expected sync handler"),
+        };
         let req = AotRequest {
             method: "GET",
             path: "/x",
@@ -201,5 +275,24 @@ mod tests {
         let mut out = Vec::new();
         handler(&req, &mut out);
         assert_eq!(out, b"dummy");
+    }
+
+    #[cfg(feature = "pg-handles")]
+    #[test]
+    fn add_async_returns_async_kind() {
+        fn placeholder(
+            _method: String,
+            _path: String,
+            _params: HashMap<String, String>,
+            _query: HashMap<String, String>,
+            _headers: HashMap<String, String>,
+            _handles: std::sync::Arc<crate::aot::handles::HandleRegistry>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<u8>> + Send>> {
+            Box::pin(async { Vec::new() })
+        }
+        let mut table = AotRouteTable::new();
+        table.add_async("GET", "/db_test", placeholder);
+        let (kind, _) = table.lookup("GET", "/db_test").unwrap();
+        assert!(matches!(kind, HandlerKind::Async(_)));
     }
 }

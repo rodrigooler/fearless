@@ -126,9 +126,16 @@ pub struct BenchmarkServer {
     pub aot_table: Option<Arc<crate::aot::AotRouteTable>>,
     /// Optional Postgres connection pool. Built once at startup in
     /// `run_with_aot` when `FEARLESS_SQL_PRIMARY` is set; shared across all
-    /// io_uring workers via this Arc. `None` means /db routes return 503.
+    /// io_uring workers via this Arc. `None` means async PG routes return 503.
     #[cfg(feature = "pg-handles")]
     pub pg_pool: Option<Arc<deadpool_postgres::Pool>>,
+    /// Optional handle registry built from `register_handles(pool)` (generated)
+    /// and warmed via `prepare_all()` at startup. Generated async handlers
+    /// receive this through the `AotAsyncHandlerFn` signature. `None` means
+    /// no async handlers are registered (or `aot-handlers` feature is off);
+    /// the dispatcher falls back to 503 for any async route in that case.
+    #[cfg(feature = "pg-handles")]
+    pub handle_registry: Option<Arc<crate::aot::handles::HandleRegistry>>,
 }
 
 impl BenchmarkServer {
@@ -154,6 +161,8 @@ impl BenchmarkServer {
             aot_table: None,
             #[cfg(feature = "pg-handles")]
             pg_pool: None,
+            #[cfg(feature = "pg-handles")]
+            handle_registry: None,
         }
     }
 
@@ -170,6 +179,19 @@ impl BenchmarkServer {
     #[cfg(feature = "pg-handles")]
     pub fn with_pg_pool(mut self, pool: Arc<deadpool_postgres::Pool>) -> Self {
         self.pg_pool = Some(pool);
+        self
+    }
+
+    /// Builder: attach a pre-warmed handle registry. Call this once at startup
+    /// after `prepare_all()` succeeds; the registry is shared across all
+    /// workers via Arc and reaches generated async handlers through the
+    /// `AotAsyncHandlerFn` signature.
+    #[cfg(feature = "pg-handles")]
+    pub fn with_handle_registry(
+        mut self,
+        registry: Arc<crate::aot::handles::HandleRegistry>,
+    ) -> Self {
+        self.handle_registry = Some(registry);
         self
     }
 }

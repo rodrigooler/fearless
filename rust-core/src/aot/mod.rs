@@ -16,9 +16,6 @@ pub mod runtime;
 pub mod handlers;
 
 #[cfg(feature = "pg-handles")]
-pub mod db_handler;
-
-#[cfg(feature = "pg-handles")]
 pub mod handles;
 
 /// Build-generated: STATEMENTS phf map + register_handles() constructor.
@@ -27,4 +24,6 @@ pub mod handles;
 #[cfg(all(feature = "pg-handles", feature = "aot-handlers"))]
 pub mod registry_init;
 
-pub use dispatch::{AotHandlerFn, AotRoute, AotRouteTable, RouteSegment};
+pub use dispatch::{AotHandlerFn, AotRoute, AotRouteTable, HandlerKind, RouteSegment};
+#[cfg(feature = "pg-handles")]
+pub use dispatch::AotAsyncHandlerFn;

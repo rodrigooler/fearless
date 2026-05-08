@@ -194,7 +194,7 @@ impl Connection {
         let mut classified_consumed: usize = 0;
         let mut bytes_consumed: usize = 0;
         let aot_table = self.server.aot_table.clone();
-        // When a /db (async) request fires we park; signal so the post-loop
+        // When an async route fires we park; signal so the post-loop
         // tail skips submit_write entirely (the eventfd CQE will deliver).
         #[cfg(feature = "pg-handles")]
         let mut parked_async = false;
@@ -205,58 +205,10 @@ impl Connection {
 
             // Three dispatch paths in priority order:
             //   1. Benchmark fast path — Plaintext/Json: pre-baked bytes from snap
-            //   2. AOT path — only if NotFound AND aot_table present: parse + handler
+            //   2. AOT sync path  — NotFound + AotRouteTable hit: run handler inline
+            //   2b. AOT async path — NotFound + AotRouteTable hit: spawn on bridge, park
             //   3. NotFound fallback — pre-baked 404 from snap
-            //   4. Async path — Route::Db (pg-handles only): spawn on bridge, park
             let written = match cls.route {
-                #[cfg(feature = "pg-handles")]
-                Route::Db => {
-                    // If preceding pipelined requests already filled the write
-                    // region, flush those first; the /db stays in the read
-                    // buffer and will be re-classified on the next pass.
-                    if i > 0 {
-                        break;
-                    }
-                    // Consume the /db request bytes so we don't re-process them
-                    // when the connection wakes from the parked state.
-                    bytes_consumed = request_end;
-                    classified_consumed += 1;
-
-                    let pool = self.server.pg_pool.clone();
-                    match pool {
-                        Some(pool) => {
-                            let slot_id = (token & 0xFFFF_FFFF) as u32;
-                            let pool_for_task = pool.clone();
-                            bridge.spawn(slot_id, async move {
-                                crate::aot::db_handler::handle_db_random(&pool_for_task).await
-                            });
-                            self.park_for_async(cls.close);
-                            parked_async = true;
-                            break;
-                        }
-                        None => {
-                            // pg-handles built but no pool — return 503 inline.
-                            const SVC_UNAVAIL: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                            if self.write_filled + SVC_UNAVAIL.len() > WRITE_REGION_BYTES {
-                                self.close();
-                                return Ok(false);
-                            }
-                            let write_slice = unsafe {
-                                std::slice::from_raw_parts_mut(
-                                    self.slot.write_ptr,
-                                    WRITE_REGION_BYTES,
-                                )
-                            };
-                            write_slice[self.write_filled..self.write_filled + SVC_UNAVAIL.len()]
-                                .copy_from_slice(SVC_UNAVAIL);
-                            self.write_filled += SVC_UNAVAIL.len();
-                            close_after = true;
-                            // Already accounted for bytes_consumed/classified_consumed above;
-                            // jump to the post-loop write submission.
-                            break;
-                        }
-                    }
-                }
                 Route::Plaintext | Route::Json => {
                     // Existing benchmark hot path. `snap` keeps the Arc alive for this fn.
                     let bytes = snap.get_ref(variant_for(*cls));
@@ -276,7 +228,7 @@ impl Connection {
                 }
                 Route::NotFound => {
                     // Try AOT lookup first (only if any AOT routes are registered).
-                    let aot_written = if let Some(table) = aot_table.as_ref() {
+                    let aot_outcome = if let Some(table) = aot_table.as_ref() {
                         let request_bytes = unsafe {
                             std::slice::from_raw_parts(
                                 self.slot.read_ptr.add(request_start),
@@ -291,30 +243,98 @@ impl Connection {
                             self.write_filled,
                         )
                     } else {
-                        None
+                        AotOutcome::NoMatch
                     };
 
-                    if let Some(n) = aot_written {
-                        n
-                    } else {
-                        // No AOT match — write the pre-baked 404.
-                        let bytes = snap.get_ref(variant_for(*cls));
-                        if self.write_filled + bytes.len() > WRITE_REGION_BYTES {
+                    match aot_outcome {
+                        AotOutcome::SyncWritten(n) => n,
+                        #[cfg(feature = "pg-handles")]
+                        AotOutcome::Async {
+                            handler,
+                            method,
+                            path,
+                            params,
+                            query,
+                            headers,
+                        } => {
+                            // If preceding pipelined requests already filled
+                            // the write region, flush those first; this async
+                            // request stays in the read buffer and gets
+                            // re-classified on the next pass.
+                            if i > 0 {
+                                break;
+                            }
+                            let registry = match self.server.handle_registry.as_ref() {
+                                Some(r) => r.clone(),
+                                None => {
+                                    // Async route registered but no handle
+                                    // registry available (e.g. PG env not set
+                                    // or aot-handlers off). Return 503 inline.
+                                    const SVC_UNAVAIL: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                                    if self.write_filled + SVC_UNAVAIL.len() > WRITE_REGION_BYTES {
+                                        self.close();
+                                        return Ok(false);
+                                    }
+                                    let write_slice = unsafe {
+                                        std::slice::from_raw_parts_mut(
+                                            self.slot.write_ptr,
+                                            WRITE_REGION_BYTES,
+                                        )
+                                    };
+                                    write_slice[self.write_filled
+                                        ..self.write_filled + SVC_UNAVAIL.len()]
+                                        .copy_from_slice(SVC_UNAVAIL);
+                                    self.write_filled += SVC_UNAVAIL.len();
+                                    close_after = true;
+                                    bytes_consumed = request_end;
+                                    classified_consumed += 1;
+                                    break;
+                                }
+                            };
+                            // Consume the request bytes so we don't re-process
+                            // them on wake.
+                            bytes_consumed = request_end;
+                            classified_consumed += 1;
+
+                            let slot_id = (token & 0xFFFF_FFFF) as u32;
+                            bridge.spawn(slot_id, async move {
+                                handler(method, path, params, query, headers, registry).await
+                            });
+                            self.park_for_async(cls.close);
+                            parked_async = true;
+                            break;
+                        }
+                        AotOutcome::NoMatch => {
+                            // No AOT match — write the pre-baked 404.
+                            let bytes = snap.get_ref(variant_for(*cls));
+                            if self.write_filled + bytes.len() > WRITE_REGION_BYTES {
+                                if i == 0 {
+                                    self.close();
+                                    return Ok(false);
+                                }
+                                break;
+                            }
+                            let write_slice = unsafe {
+                                std::slice::from_raw_parts_mut(
+                                    self.slot.write_ptr,
+                                    WRITE_REGION_BYTES,
+                                )
+                            };
+                            write_slice[self.write_filled..self.write_filled + bytes.len()]
+                                .copy_from_slice(bytes);
+                            bytes.len()
+                        }
+                        AotOutcome::Overflow => {
+                            // Sync handler ran but its output won't fit; if
+                            // we've already buffered prior writes, flush them
+                            // first. Otherwise close (single response is too
+                            // large for the write region).
                             if i == 0 {
                                 self.close();
                                 return Ok(false);
                             }
                             break;
                         }
-                        let write_slice = unsafe {
-                            std::slice::from_raw_parts_mut(
-                                self.slot.write_ptr,
-                                WRITE_REGION_BYTES,
-                            )
-                        };
-                        write_slice[self.write_filled..self.write_filled + bytes.len()]
-                            .copy_from_slice(bytes);
-                        bytes.len()
                     }
                 }
             };
@@ -345,10 +365,13 @@ impl Connection {
 
         // Async-parked path: bridge::spawn already running; the eventfd CQE
         // will deliver the response and submit a Send. Don't submit_write here.
-        // State is already AwaitingAsync (set in the Db arm via park_for_async).
+        // State is already AwaitingAsync (set in the async arm via park_for_async).
         #[cfg(feature = "pg-handles")]
         if parked_async {
-            assert_eq!(self.write_filled, 0, "/db dispatch must not buffer prior writes");
+            assert_eq!(
+                self.write_filled, 0,
+                "async dispatch must not buffer prior writes"
+            );
             return Ok(true);
         }
 
@@ -364,23 +387,28 @@ impl Connection {
         }
     }
 
-    /// Try to dispatch a request through the AOT table. Returns:
-    ///   - `Some(bytes_written)` on a successful AOT handler call (response copied into write region)
-    ///   - `None` if no route matches, the request line can't be parsed, or the response
-    ///     would overflow the write region. The caller falls back to the 404 path on `None`.
+    /// Try to dispatch a request through the AOT table.
     ///
     /// `request_bytes` is the full HTTP request (line + headers + `\r\n\r\n`).
-    /// `scratch` is a per-Connection Vec used to capture handler output before copying into
-    /// the write region. Cleared on entry; never freed.
+    /// `scratch` is a per-Connection Vec used to capture sync handler output
+    /// before copying into the write region. Cleared on entry; never freed.
+    ///
+    /// Sync handlers run inline and copy their output into the write region.
+    /// Async handlers are NOT run here — the caller spawns them on the bridge
+    /// after taking the owned state out of `AotOutcome::Async`.
     fn try_aot_dispatch(
         table: &crate::aot::AotRouteTable,
         request_bytes: &[u8],
         scratch: &mut Vec<u8>,
         write_ptr: *mut u8,
         write_filled: usize,
-    ) -> Option<usize> {
-        let (method, path) = parse_method_path(request_bytes)?;
-        let (handler, params) = table.lookup(method, path)?;
+    ) -> AotOutcome {
+        let Some((method, path)) = parse_method_path(request_bytes) else {
+            return AotOutcome::NoMatch;
+        };
+        let Some((kind, params)) = table.lookup(method, path) else {
+            return AotOutcome::NoMatch;
+        };
 
         let std_params: HashMap<String, String> = params.into_iter().collect();
 
@@ -393,29 +421,64 @@ impl Connection {
         let query = parse_query_string(query_str);
         let headers = parse_headers(request_bytes);
 
-        let req = AotRequest {
-            method,
-            path: clean_path,
-            url: path,
-            ip: "",
-            params: &std_params,
-            query: &query,
-            headers: &headers,
-        };
+        match kind {
+            crate::aot::HandlerKind::Sync(handler) => {
+                let req = AotRequest {
+                    method,
+                    path: clean_path,
+                    url: path,
+                    ip: "",
+                    params: &std_params,
+                    query: &query,
+                    headers: &headers,
+                };
 
-        scratch.clear();
-        handler(&req, scratch);
+                scratch.clear();
+                handler(&req, scratch);
 
-        let n = scratch.len();
-        if write_filled + n > WRITE_REGION_BYTES {
-            return None;
+                let n = scratch.len();
+                if write_filled + n > WRITE_REGION_BYTES {
+                    return AotOutcome::Overflow;
+                }
+                unsafe {
+                    let dst = write_ptr.add(write_filled);
+                    std::ptr::copy_nonoverlapping(scratch.as_ptr(), dst, n);
+                }
+                AotOutcome::SyncWritten(n)
+            }
+            #[cfg(feature = "pg-handles")]
+            crate::aot::HandlerKind::Async(handler) => AotOutcome::Async {
+                handler: *handler,
+                method: method.to_string(),
+                path: path.to_string(),
+                params: std_params,
+                query,
+                headers,
+            },
         }
-        unsafe {
-            let dst = write_ptr.add(write_filled);
-            std::ptr::copy_nonoverlapping(scratch.as_ptr(), dst, n);
-        }
-        Some(n)
     }
+}
+
+/// Outcome of a single AOT dispatch attempt. Sync handlers run inline (writing
+/// into the slot's write region) and return `SyncWritten`. Async handlers
+/// require the caller to spawn the future on the bridge — `Async` carries the
+/// function pointer + owned request state across the spawn boundary.
+enum AotOutcome {
+    SyncWritten(usize),
+    /// Sync handler produced output that won't fit in the remaining write
+    /// region. Caller flushes prior buffered writes and retries on next pass,
+    /// or closes if this is the first request in the batch.
+    Overflow,
+    NoMatch,
+    #[cfg(feature = "pg-handles")]
+    Async {
+        handler: crate::aot::AotAsyncHandlerFn,
+        method: String,
+        path: String,
+        params: HashMap<String, String>,
+        query: HashMap<String, String>,
+        headers: HashMap<String, String>,
+    },
 }
 
 #[cfg(feature = "pg-handles")]
@@ -570,9 +633,5 @@ fn variant_for(cls: Classification) -> Variant {
         (Route::Json, true) => Variant::JsonClose,
         (Route::NotFound, false) => Variant::NotFoundKeepalive,
         (Route::NotFound, true) => Variant::NotFoundClose,
-        // Route::Db is dispatched via the async bridge and never reaches the
-        // pre-baked response table. Unreachable in steady state.
-        #[cfg(feature = "pg-handles")]
-        (Route::Db, _) => Variant::NotFoundClose,
     }
 }
