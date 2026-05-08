@@ -1,0 +1,16 @@
+{
+  "name": "elysia-bun-bench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run server.ts"
+  },
+  "dependencies": {
+    "elysia": "1.1.25",
+    "postgres": "3.4.5"
+  },
+  "devDependencies": {
+    "bun-types": "1.1.34"
+  }
+}

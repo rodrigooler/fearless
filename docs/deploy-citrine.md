@@ -2,14 +2,44 @@
 
 This guide takes you from a fresh bare-metal Linux box to a Fearless server hitting the kind of throughput TFB Citrine reports — where the framework actually shines vs the OrbStack VM dev numbers.
 
+> **Quick path (Phase 1.2+):** if you just want results, skip to [§ 0 One-shot deploy](#0-one-shot-deploy-phase-12) — `scripts/deploy-baremetal.sh` does sections 1, 3, 5, 6 and the new comparison-app run for you.
+
 **Why bare-metal:** OrbStack VM hides 3-5× of available throughput because (a) virtio-net IRQs land on a single vCPU, (b) hypervisor scheduling dilutes io_uring SQPOLL, (c) ARM-on-Mac translates x86 instructions for some Docker images. Bare-metal Linux on x86_64 with a multi-queue NIC removes all three ceilings.
 
 **Recommended hosts** (price/perf for benchmark traffic, not production):
-- **Hetzner AX102** — AMD Ryzen 9 7950X3D (16C/32T), 128 GB RAM, 10 GbE NIC, ~€135/month. Best price/throughput in 2026.
+- **Hetzner AX102** — AMD Ryzen 9 7950X (16C/32T), 64–128 GB RAM, 1 GbE NIC (10 GbE on AX-Line), ~€135/month. Best price/throughput in 2026 and the host this guide is calibrated for.
 - **Latitude.sh m4.large** — Intel Xeon Silver 4316 (20C), 128 GB RAM, 25 GbE, ~$340/month.
 - **Equinix Metal m3.small.x86** — Intel Xeon E-2378G (8C/16T), 64 GB RAM, 2×10 GbE, ~$300/month.
 
 Don't use AWS m7i.metal for first runs — egress and VPC overhead will dominate.
+
+> **Note on this doc's location:** `docs/superpowers/` is gitignored as internal team material. This file (`docs/deploy-citrine.md`) is not — it ships with the repo so anyone reproducing the bench has it.
+
+## 0. One-shot deploy (Phase 1.2+)
+
+Once the host is provisioned and you have ssh access:
+
+```bash
+# from your laptop (repo root)
+./scripts/deploy-baremetal.sh ax102.example.com --ssh-user root
+# or, to rehearse without touching the remote:
+./scripts/deploy-baremetal.sh ax102.example.com --ssh-user root --dry-run
+```
+
+The script:
+
+1. ssh smoke-tests the target.
+2. rsyncs the repo to `/opt/fearless` (excluding `target/`, `node_modules/`, `.git/`, `docs/superpowers/`).
+3. installs Docker, Node 20+, Bun 1.1+, Rust stable, wrk.
+4. generates AOT handlers (`scripts/fearless-build.mjs`) and builds the rust-core image (`fearless-rust-aot:dev`) plus all four comparison apps (`bench/comparison/{ntex-rust,bun-serve,elysia-bun,hono-bun}`).
+5. starts two Postgres instances: the bench compose at `:5433` (used by `run-bench.mjs`) and a host-network Postgres at `:5432` (for the comparison apps).
+6. runs `node scripts/run-bench.mjs --quick --note "bare-metal AX102 first-run"`.
+7. starts each comparison app one at a time and runs `wrk -t8 -c64 -d10s` against `/plaintext`, `/json`, `/db`.
+8. writes `bench-baremetal-report-YYYY-MM-DD.md` locally with the merged results.
+
+The script is idempotent: rerun to refresh code, rebuild, re-bench. The remote `/opt/fearless` is treated as a working tree, not a git checkout.
+
+If you'd rather walk through manually (recommended for the first run on a new host), continue with section 1.
 
 ## 1. Provision and prep
 
@@ -55,23 +85,27 @@ git clone https://github.com/rodrigooler/fearless.git
 cd fearless
 ```
 
-Generate AOT handlers from the bench app:
+### 3.1 Generate AOT handlers (Phase 1.2+ requires this)
 
 ```bash
-# Optional: install Node + Bun if you want to regenerate handlers locally.
-# For TFB submission, the generated `aot_handlers.rs` is committed to the repo
-# so cargo build is enough.
+# Install Node 20+ and Bun 1.1+
 curl -fsSL https://bun.sh/install | bash
 export PATH="$HOME/.bun/bin:$PATH"
 
-# Regenerate (idempotent if no app changes)
+# Regenerate handlers from the bench app — needed before docker build.
+# (--no-cargo skips the cargo step because the docker build does it.)
 node scripts/fearless-build.mjs examples/real-bench/server.ts --no-cargo
 ```
 
-Build the production image (with `aot-handlers` feature ON):
+If you skip this and the image has stale handlers, the rust-core binary will compile but routes won't match the latest `examples/real-bench/server.ts`.
+
+### 3.2 Build the rust-core image
 
 ```bash
-docker build -f bench/techempower/fearless-rust-aot.dockerfile -t fearless:tfb .
+# Use the SHARED tag — `fearless-rust-aot:dev`. The bench harness and any
+# manual smoke runs reuse this image, so we don't accumulate variants.
+docker build -f bench/techempower/fearless-rust-aot.dockerfile -t fearless-rust-aot:dev .
+docker builder prune -f   # reclaim build cache (disk-discipline rule)
 ```
 
 ## 4. Postgres for /db, /queries, /fortunes, /updates
@@ -103,9 +137,10 @@ docker run -d --name fearless-aot \
   --cap-add SYS_NICE \
   --cap-add NET_ADMIN \
   --security-opt seccomp=unconfined \
-  -e DATABASE_URL=postgres://postgres:pw@127.0.0.1:5432/hello_world \
+  -e FEARLESS_SQL_PRIMARY=postgres://postgres:pw@127.0.0.1:5432/hello_world \
+  -e FEARLESS_SQL_PRIMARY_POOL_SIZE=64 \
   -e FEARLESS_WORKERS=$(nproc) \
-  fearless:tfb
+  fearless-rust-aot:dev
 
 # Verify
 curl -i http://localhost:8080/plaintext
@@ -113,17 +148,45 @@ curl -i http://localhost:8080/json
 curl -i http://localhost:8080/db
 ```
 
-If `/db` 503s, the Postgres typed handle isn't yet wired (Phase C work — see roadmap). For now, that endpoint serves via the Bun fallback runtime.
+`FEARLESS_SQL_PRIMARY` (Phase 1.2+) replaces the older `DATABASE_URL` env. The pool size defaults to `64` and is sized per worker — leave it unless `pg_stat_activity` shows you're saturating.
+
+If `/db` 503s on a Phase 1.2 build, the AOT handlers were not regenerated against the current `examples/real-bench/server.ts`. Re-run `node scripts/fearless-build.mjs examples/real-bench/server.ts --no-cargo` and rebuild the image.
 
 ## 6. Bench
 
-Local sanity:
+### 6.1 Local sanity
 
 ```bash
 wrk -t 16 -c 256 -d 15 http://localhost:8080/plaintext
 ```
 
-Real TFB-equivalent run from a separate machine on the same LAN (ideally with a 10 GbE NIC):
+### 6.2 Full harness (Phase 1.2)
+
+```bash
+# Brings up Postgres + rust-core + Bun + wrk-runner, runs every scenario,
+# appends to bench-history.json. Linux auto-detects host networking; macOS
+# uses bridge + host.docker.internal. Override with FEARLESS_BENCH_HOST_MODE.
+node scripts/run-bench.mjs --quick --note "bare-metal AX102 first-run"
+```
+
+The harness is platform-portable: on Linux it picks `--network host` and `127.0.0.1` for container-to-host reach; on macOS it falls back to `-p` + `host.docker.internal`. No flags needed.
+
+### 6.3 Comparison frameworks
+
+Four head-to-head apps live in `bench/comparison/`:
+
+| Dir          | Stack                           | Build/run                                  |
+|--------------|---------------------------------|--------------------------------------------|
+| `ntex-rust`  | Rust + ntex 2 + tokio-postgres  | `cargo build --release` then `./target/release/ntex-bench` |
+| `bun-serve`  | Native Bun.serve + `postgres`   | `bun install && bun run server.ts`         |
+| `elysia-bun` | Elysia 1.x on Bun               | `bun install && bun run server.ts`         |
+| `hono-bun`   | Hono 4.x on Bun                 | `bun install && bun run server.ts`         |
+
+Each app honours `BENCH_PORT` and `DATABASE_URL`. Run wrk against each with the same plan as the fearless harness and compare. `scripts/deploy-baremetal.sh` automates the loop.
+
+### 6.4 Real TFB-equivalent run
+
+From a separate machine on the same LAN (ideally with a 10 GbE NIC):
 
 ```bash
 # Install pipeline.lua first — see scripts/run-bench.mjs for the file
@@ -158,6 +221,13 @@ See [`tfb-submission.md`](./tfb-submission.md) for the PR checklist.
 ## Cleanup
 
 ```bash
-docker stop fearless-aot fearless-pg
-docker rm fearless-aot fearless-pg
+# Manual single-server cleanup (section 5)
+docker rm -f fearless-aot fearless-pg
+
+# Bench-harness containers (run-bench.mjs)
+docker rm -f pg-bench fearless-aot wrk-runner
+
+# Comparison setup (deploy-baremetal.sh)
+docker rm -f fearless-bench-pg fearless-cmp-pg
+docker builder prune -f
 ```

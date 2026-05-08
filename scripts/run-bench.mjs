@@ -28,6 +28,29 @@ import { resolve } from "node:path";
 const HISTORY_PATH = resolve("bench-history.json");
 const SCHEMA = "fearless-bench-history-v1";
 
+// ---------------------------------------------------------------------------
+// Platform detection — host-from-container hostname
+// ---------------------------------------------------------------------------
+// On macOS (Docker Desktop / OrbStack) containers reach the host via the
+// magic DNS name `host.docker.internal`. On Linux that name is not resolved
+// by default; the cleanest portable answer is `--network host` + `127.0.0.1`.
+// `FEARLESS_BENCH_HOST_MODE` overrides detection (host|bridge) for CI.
+const HOST_MODE = (() => {
+  const override = process.env.FEARLESS_BENCH_HOST_MODE;
+  if (override === "host" || override === "bridge") return override;
+  // Linux → use host networking (zero-overhead, NIC IRQs land on real CPUs).
+  // macOS → bridge networking with host.docker.internal (Docker Desktop / OrbStack).
+  return process.platform === "linux" ? "host" : "bridge";
+})();
+
+const HOST_FROM_CONTAINER = HOST_MODE === "host" ? "127.0.0.1" : "host.docker.internal";
+
+function dockerNetFlags(publishPort) {
+  // host mode: containers share host net namespace → no -p needed, just bind on host port
+  // bridge mode: explicit -p mapping
+  return HOST_MODE === "host" ? "--network host" : `-p ${publishPort}:${publishPort}`;
+}
+
 function parseArgs(argv) {
   const args = { label: null, note: null, quick: false };
   for (let i = 2; i < argv.length; i++) {
@@ -82,12 +105,13 @@ function gitInfo() {
 // ---------------------------------------------------------------------------
 
 function setup() {
+  console.log(grey(`setup: host-mode=${HOST_MODE} (host-from-container=${HOST_FROM_CONTAINER})`));
   console.log(grey("setup: tear down stale containers..."));
   sh("docker rm -f pg-bench fearless-aot wrk-runner 2>/dev/null || true", { allowFail: true });
   sh("pkill -f 'bun run examples/real-bench' 2>/dev/null || true", { allowFail: true });
 
   console.log(grey("setup: start Postgres..."));
-  sh("docker run -d --name pg-bench -e POSTGRES_PASSWORD=pw -p 5432:5432 postgres:16 >/dev/null");
+  sh(`docker run -d --name pg-bench -e POSTGRES_PASSWORD=pw ${dockerNetFlags(5432)} postgres:16 >/dev/null`);
   sh("sleep 5");
   console.log(grey("setup: seed world table..."));
   sh(`docker exec -i pg-bench psql -U postgres <<'SQL' >/dev/null
@@ -108,7 +132,7 @@ SQL
   sh("docker build -f bench/techempower/fearless-rust-aot.dockerfile -t fearless-rust-aot:dev . 2>&1 | tail -1");
 
   console.log(grey("setup: start rust-core container (8080)..."));
-  sh("docker run -d --name fearless-aot --ulimit memlock=-1 --cap-add SYS_NICE --cap-add NET_ADMIN --security-opt seccomp=unconfined -p 8080:8080 -e FEARLESS_SQL_PRIMARY=postgres://postgres:pw@host.docker.internal:5432/postgres -e FEARLESS_SQL_PRIMARY_POOL_SIZE=64 fearless-rust-aot:dev >/dev/null");
+  sh(`docker run -d --name fearless-aot --ulimit memlock=-1 --cap-add SYS_NICE --cap-add NET_ADMIN --security-opt seccomp=unconfined ${dockerNetFlags(8080)} -e FEARLESS_SQL_PRIMARY=postgres://postgres:pw@${HOST_FROM_CONTAINER}:5432/postgres -e FEARLESS_SQL_PRIMARY_POOL_SIZE=64 fearless-rust-aot:dev >/dev/null`);
   sh("sleep 2");
 
   console.log(grey("setup: start Bun server (8081)..."));
@@ -116,6 +140,11 @@ SQL
   sh("sleep 2");
 
   console.log(grey("setup: start wrk runner..."));
+  // wrk-runner always uses host networking — on Linux it shares the host
+  // namespace (zero overhead). On macOS OrbStack/Docker-Desktop `--network host`
+  // is rewritten so the container can still reach published ports via
+  // `127.0.0.1` (OrbStack) or via gateway resolution (Desktop). Both behaviours
+  // line up with what the smoke checks below assume.
   sh("docker run -d --name wrk-runner --network host ubuntu:22.04 sleep 86400 >/dev/null");
   sh("docker exec wrk-runner sh -c 'DEBIAN_FRONTEND=noninteractive apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y wrk curl' >/dev/null 2>&1");
   sh(`docker exec wrk-runner sh -c "cat > /tmp/pipe.lua <<'EOF'

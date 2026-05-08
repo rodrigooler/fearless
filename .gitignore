@@ -2,9 +2,11 @@ node_modules
 dist
 .cargo
 rust-core/target
+bench/comparison/*/target/
 .DS_Store
 *.log
 FrameworkBenchmarks/
+bench-baremetal-report-*.md
 
 # Internal team docs — local only, not for public history
 docs/superpowers/
