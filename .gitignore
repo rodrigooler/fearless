@@ -8,3 +8,6 @@ FrameworkBenchmarks/
 
 # Internal team docs — local only, not for public history
 docs/superpowers/
+
+# Serena MCP project state — local only
+.serena/
