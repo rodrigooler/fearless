@@ -1,4 +1,4 @@
-use fearless_core::{benchmark_manifest_routes_only, is_benchmark_manifest, Manifest};
+use fearless_core::{benchmark_manifest_routes_only, is_benchmark_manifest};
 
 #[test]
 fn detects_pure_benchmark_manifest() {
