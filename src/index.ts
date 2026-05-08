@@ -31,6 +31,7 @@ export type { CorsOptions } from "./dependencies/index.js";
 export type { SecurityHeadersOptions } from "./dependencies/index.js";
 
 // Functional handler API
+export { RequestContext } from "./ctx.js";
 export { HttpError, ValidationError } from "./errors.js";
 export type {
   Ctx,
