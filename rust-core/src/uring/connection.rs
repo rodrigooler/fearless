@@ -1,25 +1,30 @@
-use crate::benchmark::parser::{classify, Classification, Route};
+use crate::benchmark::parser::{parse_pipeline, Classification, Route};
 use crate::benchmark::responses::{BenchmarkServer, Variant};
 use io_uring::{opcode, types::Fd, IoUring};
 use std::io;
 use std::os::fd::RawFd;
 use std::sync::Arc;
 
-const READ_BUF: usize = 4096;
+const READ_BUF: usize = 16 * 1024;
+const WRITE_BUF: usize = 64 * 1024;
+const MAX_PIPELINE: usize = 64;
 
 pub struct Connection {
     fd: RawFd,
     server: Arc<BenchmarkServer>,
     read_buf: Box<[u8; READ_BUF]>,
-    write_buf: Option<Arc<[u8]>>,
+    write_buf: Box<[u8; WRITE_BUF]>,
     read_filled: usize,
+    write_filled: usize,
+    write_offset: usize,
     state: State,
+    close_after_drain: bool,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum State {
     Reading,
-    Writing { close_after: bool },
+    Writing,
 }
 
 impl Connection {
@@ -28,30 +33,48 @@ impl Connection {
             fd,
             server,
             read_buf: Box::new([0u8; READ_BUF]),
-            write_buf: None,
+            write_buf: Box::new([0u8; WRITE_BUF]),
             read_filled: 0,
+            write_filled: 0,
+            write_offset: 0,
             state: State::Reading,
+            close_after_drain: false,
         }
     }
 
     pub fn submit_read(&mut self, ring: &mut IoUring, token: u64) -> io::Result<()> {
+        debug_assert!(self.read_filled < READ_BUF, "read_filled out of bounds");
         let ptr = unsafe { self.read_buf.as_mut_ptr().add(self.read_filled) };
         let len = (READ_BUF - self.read_filled) as u32;
-        let entry = opcode::Recv::new(Fd(self.fd), ptr, len).build().user_data(token);
-        unsafe { ring.submission().push(&entry).map_err(|_| io::Error::other("sq full"))? };
+        let entry = opcode::Recv::new(Fd(self.fd), ptr, len)
+            .build()
+            .user_data(token);
+        unsafe {
+            ring.submission()
+                .push(&entry)
+                .map_err(|_| io::Error::other("sq full"))?
+        };
         Ok(())
     }
 
     fn submit_write(&mut self, ring: &mut IoUring, token: u64) -> io::Result<()> {
-        let buf = self.write_buf.as_ref().expect("write buf set");
-        let entry = opcode::Send::new(Fd(self.fd), buf.as_ptr(), buf.len() as u32)
+        debug_assert!(
+            self.write_offset < self.write_filled,
+            "write_offset >= write_filled"
+        );
+        let ptr = unsafe { self.write_buf.as_ptr().add(self.write_offset) };
+        let len = (self.write_filled - self.write_offset) as u32;
+        let entry = opcode::Send::new(Fd(self.fd), ptr, len)
             .build()
             .user_data(token);
-        unsafe { ring.submission().push(&entry).map_err(|_| io::Error::other("sq full"))? };
+        unsafe {
+            ring.submission()
+                .push(&entry)
+                .map_err(|_| io::Error::other("sq full"))?
+        };
         Ok(())
     }
 
-    /// Returns Ok(true) if the connection should remain in the registry, Ok(false) if it has closed.
     pub fn handle_completion(
         &mut self,
         ring: &mut IoUring,
@@ -65,31 +88,103 @@ impl Connection {
                     return Ok(false);
                 }
                 self.read_filled += result as usize;
-                let buf = &self.read_buf[..self.read_filled];
-                if find_double_crlf(buf).is_none() {
-                    self.submit_read(ring, token)?;
-                    return Ok(true);
-                }
-                let cls = classify_first_line(buf);
-                let snap = self.server.responses.snapshot();
-                let bytes = snap.get(variant_for(cls));
-                self.write_buf = Some(bytes);
-                self.state = State::Writing { close_after: cls.close };
-                self.submit_write(ring, token)?;
-                Ok(true)
+                self.process_buffered(ring, token)
             }
-            State::Writing { close_after } => {
-                if result <= 0 || close_after {
+            State::Writing => {
+                if result <= 0 {
                     self.close();
                     return Ok(false);
                 }
-                self.read_filled = 0;
-                self.write_buf = None;
+                self.write_offset += result as usize;
+                if self.write_offset < self.write_filled {
+                    // Partial write — keep draining.
+                    self.submit_write(ring, token)?;
+                    return Ok(true);
+                }
+                if self.close_after_drain {
+                    self.close();
+                    return Ok(false);
+                }
+                self.write_filled = 0;
+                self.write_offset = 0;
                 self.state = State::Reading;
+                if self.read_filled > 0 {
+                    // Process any leftover pipelined requests that didn't fit in the previous write batch.
+                    return self.process_buffered(ring, token);
+                }
                 self.submit_read(ring, token)?;
                 Ok(true)
             }
         }
+    }
+
+    fn process_buffered(&mut self, ring: &mut IoUring, token: u64) -> io::Result<bool> {
+        let snap = self.server.responses.snapshot();
+        let mut classifications =
+            [Classification { route: Route::NotFound, close: false }; MAX_PIPELINE];
+        let result = parse_pipeline(&self.read_buf[..self.read_filled], &mut classifications);
+
+        if result.count == 0 {
+            // No complete request yet; need more data. Guard against full buffer with no terminator
+            // (single oversized request) by closing rather than spinning.
+            if self.read_filled == READ_BUF {
+                self.close();
+                return Ok(false);
+            }
+            self.submit_read(ring, token)?;
+            return Ok(true);
+        }
+
+        let mut close_after = false;
+        let mut classified_consumed: usize = 0;
+        for (i, cls) in classifications[..result.count].iter().enumerate() {
+            let bytes = snap.get(variant_for(*cls));
+            if self.write_filled + bytes.len() > WRITE_BUF {
+                // This response would overflow the write buffer — flush what we have and
+                // leave the rest of the parsed batch in the read buffer for the next round.
+                if i == 0 {
+                    // Single response larger than WRITE_BUF — should be impossible with current
+                    // baked responses (~140B), but guard anyway.
+                    self.close();
+                    return Ok(false);
+                }
+                break;
+            }
+            self.write_buf[self.write_filled..self.write_filled + bytes.len()]
+                .copy_from_slice(&bytes);
+            self.write_filled += bytes.len();
+            classified_consumed += 1;
+            if cls.close {
+                close_after = true;
+                break;
+            }
+        }
+
+        // Compute how many input bytes we actually consumed by re-walking the parser output we used.
+        // Each classification consumed `request_len` bytes; parse_pipeline already returned the
+        // total `consumed` for ALL classifications. We need the prefix consumption for the ones we
+        // actually copied to the write buffer.
+        let consumed = if classified_consumed == result.count {
+            result.consumed
+        } else {
+            // Re-parse just the prefix we used to find its byte count. Cheaper than carrying
+            // per-request offsets through parse_pipeline.
+            let mut tmp = [Classification { route: Route::NotFound, close: false }; MAX_PIPELINE];
+            let prefix_result = parse_pipeline(
+                &self.read_buf[..self.read_filled],
+                &mut tmp[..classified_consumed],
+            );
+            prefix_result.consumed
+        };
+
+        // Compact read buffer.
+        self.read_buf.copy_within(consumed..self.read_filled, 0);
+        self.read_filled -= consumed;
+
+        self.close_after_drain = close_after;
+        self.state = State::Writing;
+        self.submit_write(ring, token)?;
+        Ok(true)
     }
 
     fn close(&self) {
@@ -97,16 +192,6 @@ impl Connection {
             libc::close(self.fd);
         }
     }
-}
-
-#[inline]
-fn classify_first_line(buf: &[u8]) -> Classification {
-    if buf.is_empty() {
-        return Classification { route: Route::NotFound, close: false };
-    }
-    let line_end = memchr::memchr(b'\n', buf).unwrap_or(buf.len().saturating_sub(1));
-    let end = (line_end + 1).min(buf.len());
-    classify(&buf[..end])
 }
 
 #[inline]
@@ -119,20 +204,4 @@ fn variant_for(cls: Classification) -> Variant {
         (Route::NotFound, false) => Variant::NotFoundKeepalive,
         (Route::NotFound, true) => Variant::NotFoundClose,
     }
-}
-
-#[inline]
-fn find_double_crlf(buf: &[u8]) -> Option<usize> {
-    let mut i = 0;
-    while let Some(off) = memchr::memchr(b'\r', &buf[i..]) {
-        let pos = i + off;
-        if pos + 4 > buf.len() {
-            return None;
-        }
-        if &buf[pos..pos + 4] == b"\r\n\r\n" {
-            return Some(pos);
-        }
-        i = pos + 1;
-    }
-    None
 }
