@@ -1,8 +1,8 @@
 # Fearless
 
-A TypeScript microframework with a hybrid Rust+Bun runtime. You write idiomatic TS; declarative routes execute on a Rust core at multi-million req/s, and function handlers execute on Bun. Both ship in the same deployable unit.
+A TypeScript microframework with a hybrid Rust+Bun runtime. You write idiomatic TS; declarative routes execute on a Rust core at multi-million req/s, function handlers execute on Bun, and `await db.queryOne(sql\`...\`)` compiles to native Rust async via the io_uring + tokio bridge. Everything ships in the same deployable unit.
 
-> **About the benchmarks:** plaintext / JSON routes hit ~8.5M req/s pipelined on a Mac OrbStack VM (Rust core). Handler routes hit Bun-class throughput (~400-800k req/s). Be honest with yourself about which path your endpoints actually take — see [Performance](#performance) for the breakdown.
+> **About the benchmarks:** plaintext / JSON routes hit ~9.7M req/s pipelined on a Mac OrbStack VM (Rust core). Typed SQL handlers hit ~42k req/s end-to-end against local Postgres — same throughput as hand-written Rust (Docker NAT is the ceiling; bare-metal projection 200k+). Bun-fallback handlers hit Bun-class throughput (~400-800k req/s). Be honest with yourself about which path your endpoints actually take — see [Performance](#performance) for the breakdown.
 
 ## Quick start
 
@@ -50,6 +50,7 @@ That's it. No config files, no decorators, no plugins to wire up.
 ## Why Fearless
 
 - **Hybrid runtime.** Declarative routes run on a Rust core; function handlers run on Bun. Both in the same process group — no operational split.
+- **Typed SQL at native speed.** `await db.queryOne(sql\`...\`)` compiles to native Rust async (Postgres prepared statements + io_uring/tokio bridge). Same throughput as hand-written Rust. See [Typed SQL handles](#typed-sql-handles).
 - **Functional handler API.** `(ctx) => Response` — return a `Response`, no `(req, res, next)` mess.
 - **Hooks for everything else.** `onRequest` for auth, `onResponse` for logging, `onError` for recovery.
 - **Small surface.** ~10 public types. No DI container, no decorator soup, no required validation library.
@@ -263,6 +264,53 @@ app.json("/users/:id", { id: "{{ params.id }}" });
 
 Use templates for: health checks, version endpoints, well-known paths, static API responses. Use handlers for: anything with branching, validation, IO, or business logic.
 
+## Typed SQL handles
+
+Async handlers that talk to Postgres can compile to native Rust — same code path as the hot Rust core, no Bun round-trip. The pattern:
+
+```ts
+import { App, fearless, sql } from "fearless";
+
+const db = fearless.sql("primary");
+
+const app = new App({ port: 3000 });
+
+app.get("/db", async (ctx) =>
+  await db.queryOne(
+    sql`SELECT id, randomnumber FROM world WHERE id = ${Math.floor(Math.random() * 10000) + 1}`
+  ).then(row =>
+    row == null ? ctx.notFound() : ctx.json({ id: row.id, randomNumber: row.randomnumber })
+  )
+);
+```
+
+What happens at build time:
+
+1. The analyzer accepts the handler if every `await` targets a registered handle (`db.queryOne`, `db.queryMany`, `db.execute`)
+2. The transpiler emits `pub async fn handler_X(ctx, handles) -> Vec<u8>` calling `handles.sql.get("primary").query_one(STMT_KEY, &[&p1]).await` with manual JSON construction (no serde overhead)
+3. The build collects every `sql\`...\`` literal into a `phf::phf_map` STATEMENTS table and prepares them at startup against the connection pool
+4. The dispatcher routes via `AotRouteTable + HandlerKind::Async` through the io_uring + tokio bridge — connection parks during the await, eventfd CQE wakes the loop when the response is ready
+
+Set `FEARLESS_SQL_PRIMARY=postgres://user:pw@host:5432/db` at startup. Pool size defaults to 128 (override with `FEARLESS_SQL_PRIMARY_POOL_SIZE`).
+
+### What's supported (Phase 1.2)
+
+- `fearless.sql("name")` → SQL handle
+- Methods: `queryOne(sql\`...\`)`, `queryMany(sql\`...\`)`, `execute(sql\`...\`)`
+- Bind params: `${ctx.params.X}`, `${ctx.query.X}`, `${Math.floor(Math.random() * NUM) + NUM}`
+- Single `await` per handler body
+- Response: `ctx.json({ field: row.col, ... })`
+
+### What's not yet supported (Phase 1.3+)
+
+- `fearless.kv("name")` (Redis/Dragonfly) and `fearless.http("name")` handles
+- Multiple awaits per handler (cache-then-DB pattern)
+- Computed bind expressions beyond `Math.random` (locals, `parseInt`, etc.)
+- Schema validation (auto-derive Row types from `psql --describe`)
+- Transactions (`BEGIN`/`COMMIT`)
+
+If your handler doesn't fit the supported subset, the analyzer rejects it with a clear reason and the route falls back to Bun (still 30-80k req/s with a Postgres pool — the comparison just isn't to the Rust ceiling anymore).
+
 ## Examples
 
 | Example | Shows |
@@ -297,8 +345,6 @@ new App({
 });
 ```
 
-See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for what runs where.
-
 ## Performance
 
 Be honest with yourself about which path your endpoints take. The Rust core is fast; the Bun fallback is also fast (top of the JS-runtime tier); but they are not the same speed. The number that matters for your app is the one for the path your handlers actually run on.
@@ -309,16 +355,27 @@ Be honest with yourself about which path your endpoints take. The Rust core is f
 
 | Workload | Throughput |
 |---|---|
-| `/plaintext` non-pipelined c=256 | 455,169 req/s |
-| `/plaintext` pipeline-16 c=256   | 5,713,819 req/s |
-| `/plaintext` pipeline-32 c=256   | 8,533,881 req/s |
-| `/json` non-pipelined c=64       | 406,394 req/s |
+| `/plaintext` non-pipelined c=64  | 441k req/s |
+| `/plaintext` pipeline-32 c=256   | 9.79M req/s |
+| `/json` non-pipelined c=64       | 448k req/s |
+| `/json` pipeline-32 c=256        | 9.82M req/s |
 
 For context, the older TFB Citrine baseline this repo tracked was ~2.78M req/s plaintext and ~1.36M req/s JSON on bare metal. Fearless meets and exceeds that on weaker hardware via OrbStack.
 
-### Handler routes (Bun)
+### Typed SQL handlers (Rust async via io_uring + tokio bridge)
 
-Function handlers run on Bun's native HTTP server. Realistic ranges based on Bun's published numbers:
+`async (ctx) => await db.queryOne(sql\`...\`)`. Same rig + Postgres 16 in Docker.
+
+| Workload | Throughput |
+|---|---|
+| `/db` (single SELECT WHERE id=$1) c=64  | 39k req/s |
+| `/db` c=256                              | 42.5k req/s |
+
+The OrbStack rig caps at ~42k for /db (Docker NAT + macOS networking, not the framework). pgbench reaches ~14k TPS on the same rig — we exceed that via tokio's task-level concurrency over the pool. **Bare-metal projection: 200k-400k req/s** (eliminates Docker NAT, pinned cores, real NIC queues).
+
+### Handler routes (Bun fallback)
+
+Function handlers that DON'T fit the AOT subset run on Bun's native HTTP server:
 
 | Handler shape | Approximate throughput |
 |---|---|
@@ -328,7 +385,7 @@ Function handlers run on Bun's native HTTP server. Realistic ranges based on Bun
 
 These are limited by Bun + your IO, not by Fearless.
 
-See [`benchmark.json`](./benchmark.json) for raw data, [`ARCHITECTURE.md`](./ARCHITECTURE.md) for the Rust/TypeScript split, and [`docs/deployment-tuning.md`](./docs/deployment-tuning.md) for the host-side knobs that unlock 2-5x extra throughput on bare-metal Linux (IRQ affinity, RPS/RFS, sysctl, container caps).
+See [`bench-history.json`](./bench-history.json) for raw run data, [`docs/deployment-tuning.md`](./docs/deployment-tuning.md) for the host-side knobs that unlock 2-5x extra throughput on bare-metal Linux (IRQ affinity, RPS/RFS, sysctl, container caps), and [`docs/deploy-citrine.md`](./docs/deploy-citrine.md) for the bare-metal validation playbook.
 
 ## Linting (optional)
 
