@@ -3,7 +3,7 @@ use core_affinity::CoreId;
 use io_uring::IoUring;
 use std::io;
 use std::net::TcpListener;
-use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
+use std::os::fd::{IntoRawFd, RawFd};
 use std::sync::Arc;
 use std::thread;
 
@@ -70,9 +70,4 @@ fn build_reuseport_listener(port: u16) -> io::Result<TcpListener> {
     ))))?;
     socket.listen(8192)?;
     Ok(socket.into())
-}
-
-#[allow(dead_code)]
-fn _unused_aux(fd: RawFd) -> RawFd {
-    fd.as_raw_fd()
 }
