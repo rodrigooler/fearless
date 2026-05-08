@@ -26,6 +26,23 @@ pub struct BakedResponses {
 }
 
 impl BakedResponses {
+    /// Borrowed view — no atomic refcount bump per call. Caller is responsible for
+    /// keeping the surrounding `Arc<BakedResponses>` snapshot alive while using the
+    /// slice, which is the natural pattern at the io_uring connection callsite.
+    #[inline]
+    pub fn get_ref(&self, variant: Variant) -> &[u8] {
+        match variant {
+            Variant::PlaintextKeepalive => &self.plaintext_keepalive,
+            Variant::PlaintextClose => &self.plaintext_close,
+            Variant::JsonKeepalive => &self.json_keepalive,
+            Variant::JsonClose => &self.json_close,
+            Variant::NotFoundKeepalive => &self.not_found_keepalive,
+            Variant::NotFoundClose => &self.not_found_close,
+        }
+    }
+
+    /// Owned clone — kept for callers that need to extend lifetime past the snapshot.
+    /// Hot path consumers should prefer `get_ref`.
     pub fn get(&self, variant: Variant) -> Arc<[u8]> {
         match variant {
             Variant::PlaintextKeepalive => Arc::clone(&self.plaintext_keepalive),

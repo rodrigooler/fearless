@@ -147,7 +147,9 @@ impl Connection {
                 std::slice::from_raw_parts_mut(self.slot.write_ptr, WRITE_REGION_BYTES)
             };
             for (i, cls) in classifications[..result.count].iter().enumerate() {
-                let bytes = snap.get(variant_for(*cls));
+                // Borrowed slice — no Arc::clone per response. `snap` (Arc<BakedResponses>)
+                // anchors the underlying memory for the entire process_buffered call.
+                let bytes: &[u8] = snap.get_ref(variant_for(*cls));
                 if self.write_filled + bytes.len() > WRITE_REGION_BYTES {
                     // This response would overflow the write buffer — flush what we have and
                     // leave the rest of the parsed batch in the read buffer for the next round.
@@ -160,7 +162,7 @@ impl Connection {
                     break;
                 }
                 write_slice[self.write_filled..self.write_filled + bytes.len()]
-                    .copy_from_slice(&bytes);
+                    .copy_from_slice(bytes);
                 self.write_filled += bytes.len();
                 classified_consumed += 1;
                 if cls.close {
